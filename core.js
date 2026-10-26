@@ -10,25 +10,36 @@ export function node(tag, text, className) {
   return element;
 }
 export function validateCatalog(data) {
-  const fail = () => { throw new Error('The public catalog is invalid. Restore a valid catalog.json in the lesson-data repository.'); };
-  if (!data || data.version !== 1 || !Array.isArray(data.subjects) || !Array.isArray(data.lessons)) fail();
+  const fail = () => { throw new Error('The catalog is invalid. Restore catalog.json before continuing.'); };
+  if (!data || ![1,2].includes(data.version) || !Array.isArray(data.subjects) || !Array.isArray(data.lessons)) fail();
+  const validId = value => typeof value === 'string' && /^[a-zA-Z0-9-]{1,80}$/.test(value);
   const ids = new Set();
   for (const s of data.subjects) {
-    if (!s || typeof s.id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(s.id) || ids.has(s.id) || typeof s.name !== 'string' || !s.name.trim() || s.name.length > 80) fail();
+    if (!s || !validId(s.id) || ids.has(s.id) || typeof s.name !== 'string' || !s.name.trim() || s.name.length > 80) fail();
     ids.add(s.id);
   }
+  // Keep existing documents and their URLs when upgrading the original catalog.
+  const legacy = data.version === 1;
+  const chapters = legacy ? data.subjects.filter(s => data.lessons.some(l => l?.subjectId === s.id)).map(s => ({id:s.id,subjectId:s.id,name:'General'})) : data.chapters;
+  if (!Array.isArray(chapters)) fail();
+  const chapterMap = new Map();
+  for (const c of chapters) {
+    if (!c || !validId(c.id) || chapterMap.has(c.id) || !ids.has(c.subjectId) || typeof c.name !== 'string' || !c.name.trim() || c.name.length > 120) fail();
+    chapterMap.set(c.id,c);
+  }
+  const lessons = legacy ? data.lessons.map(l => ({...l,chapterId:l?.subjectId})) : data.lessons;
   const lessonIds = new Set();
-  for (const l of data.lessons) {
-    if (!l || typeof l.id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(l.id) || lessonIds.has(l.id) || !ids.has(l.subjectId) || typeof l.title !== 'string' || !l.title.trim() || l.title.length > 160 || !['pdf','pptx'].includes(l.type) || typeof l.originalName !== 'string' || !Number.isInteger(l.size) || l.size < 1 || l.size > config.maxUploadBytes || typeof l.uploadedAt !== 'string' || !Number.isFinite(Date.parse(l.uploadedAt)) || l.path !== `documents/${l.subjectId}/${l.id}.${l.type}`) fail();
+  for (const l of lessons) {
+    if (!l || !validId(l.id) || lessonIds.has(l.id) || !ids.has(l.subjectId) || chapterMap.get(l.chapterId)?.subjectId !== l.subjectId || typeof l.title !== 'string' || !l.title.trim() || l.title.length > 160 || !['pdf','pptx'].includes(l.type) || typeof l.originalName !== 'string' || !Number.isInteger(l.size) || l.size < 1 || l.size > config.maxUploadBytes || typeof l.uploadedAt !== 'string' || !Number.isFinite(Date.parse(l.uploadedAt)) || ![`documents/${l.subjectId}/${l.id}.${l.type}`,`documents/${l.subjectId}/${l.chapterId}/${l.id}.${l.type}`].includes(l.path)) fail();
     lessonIds.add(l.id);
   }
-  return data;
+  return {...data,version:2,chapters,lessons};
 }
 export async function readPublicCatalog() {
   let response;
   try { response = await fetch(`${rawRoot}/${config.catalogPath}?v=${Date.now()}`, {cache:'no-store', credentials:'omit', referrerPolicy:'no-referrer',signal:AbortSignal.timeout(30000)}); }
-  catch { throw new Error('The library could not be reached. Check your connection and try Refresh library.'); }
-  if (!response.ok) throw new Error(response.status === 404 ? 'The lesson library has not been connected yet. The teacher needs to create the public lesson-data repository and catalog. Please check back soon.' : 'The library is temporarily unavailable. Please try Refresh library shortly.');
+  catch { throw new Error('Could not load the library. Check your connection and refresh.'); }
+  if (!response.ok) throw new Error(response.status === 404 ? 'The library is not available yet. Please check back soon.' : 'The library is unavailable. Please refresh shortly.');
   try { return validateCatalog(await response.json()); }
   catch (error) { if (error instanceof SyntaxError) throw new Error('The lesson catalog could not be read. Please let your teacher know.'); throw error; }
 }
@@ -41,19 +52,28 @@ export function lessonURL(lesson, preview = false) {
 export function applyChange(catalog, change) {
   const next = structuredClone(validateCatalog(catalog));
   if (change.kind === 'add-subject') {
-    if (next.subjects.some(s => s.name.toLocaleLowerCase() === change.subject.name.toLocaleLowerCase())) throw new Error('A subject with this name already exists.');
+    if (next.subjects.some(s => s.name.toLocaleLowerCase() === change.subject.name.toLocaleLowerCase())) throw new Error('This subject already exists.');
     next.subjects.push(change.subject);
   } else if (change.kind === 'remove-subject') {
-    if (!next.subjects.some(s => s.id === change.id)) throw new Error('This subject was already removed. Refresh to see the latest library.');
-    if (next.lessons.some(l => l.subjectId === change.id)) throw new Error('Remove this subject’s lessons before removing the subject.');
+    if (!next.subjects.some(s => s.id === change.id)) throw new Error('This subject was already removed. Refresh first.');
+    if (next.chapters.some(c => c.subjectId === change.id)) throw new Error('Remove this subject’s chapters before removing the subject.');
     next.subjects = next.subjects.filter(s => s.id !== change.id);
+  } else if (change.kind === 'add-chapter') {
+    if (!next.subjects.some(s => s.id === change.chapter.subjectId)) throw new Error('This subject no longer exists. Refresh first.');
+    if (next.chapters.some(c => c.subjectId === change.chapter.subjectId && c.name.toLocaleLowerCase() === change.chapter.name.toLocaleLowerCase())) throw new Error('This chapter already exists in this subject.');
+    next.chapters.push(change.chapter);
+  } else if (change.kind === 'remove-chapter') {
+    if (!next.chapters.some(c => c.id === change.id)) throw new Error('This chapter was already removed. Refresh first.');
+    if (next.lessons.some(l => l.chapterId === change.id)) throw new Error('Remove this chapter’s documents first.');
+    next.chapters = next.chapters.filter(c => c.id !== change.id);
   } else if (change.kind === 'upload') {
-    if (!next.subjects.some(s => s.id === change.lesson.subjectId)) throw new Error('This subject no longer exists. Refresh and choose another subject.');
-    if (next.lessons.some(l => l.id === change.lesson.id)) throw new Error('This lesson is already published. Refresh before trying again.');
+    if (!next.subjects.some(s => s.id === change.lesson.subjectId)) throw new Error('This subject no longer exists. Refresh first.');
+    if (!next.chapters.some(c => c.id === change.lesson.chapterId && c.subjectId === change.lesson.subjectId)) throw new Error('This chapter no longer exists. Refresh first.');
+    if (next.lessons.some(l => l.id === change.lesson.id)) throw new Error('This document is already published. Refresh first.');
     next.lessons.push(change.lesson);
   } else if (change.kind === 'remove-lesson') {
     const lesson = next.lessons.find(l => l.id === change.id);
-    if (!lesson || lesson.path !== change.path) throw new Error('This lesson changed or was removed. Refresh before trying again.');
+    if (!lesson || lesson.path !== change.path) throw new Error('This document changed or was removed. Refresh first.');
     next.lessons = next.lessons.filter(l => l.id !== change.id);
   } else throw new Error('Unknown library operation.');
   return validateCatalog(next);

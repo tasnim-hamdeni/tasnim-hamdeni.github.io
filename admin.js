@@ -1,91 +1,103 @@
-import {config} from './config.js';
 import {node,id,validateFile,formatDate,formatSize} from './core.js';
 import {GitHubLibrary} from './github.js';
 
 const $=id=>document.getElementById(id);
-let client=null,catalog=null,busy=false;
-$('repository-label').textContent=`${config.owner}/${config.repository} · ${config.branch}`;
-$('token-repo').textContent=config.repository;
-function status(text,type='') {$('admin-status').className=`status ${type}`;$('admin-status').textContent=text;}
-function controls() {
-  document.querySelectorAll('fieldset').forEach(f=>{f.disabled=!client || busy;});
-  document.querySelectorAll('.remove').forEach(b=>{b.disabled=!client || busy;});
-  $('connect-button').disabled=busy || !!client;$('token').disabled=busy || !!client;
-  $('disconnect').hidden=!client;$('disconnect').disabled=busy;$('admin-refresh').disabled=!client || busy;
-  $('connection-badge').textContent=client?'Connected':'Disconnected';
-  $('progress').hidden=!busy;
-  if (busy) $('progress').removeAttribute('value');
+let client=null,catalog=null,busy=false,subjectId='',chapterId='';
+function status(text,type=''){$('admin-status').className=`status ${type}`;$('admin-status').textContent=text;}
+function controls(){
+  document.querySelectorAll('fieldset').forEach(f=>{f.disabled=!client||busy;});
+  document.querySelectorAll('.remove,.item-select').forEach(b=>{b.disabled=!client||busy;});
+  $('connect-button').disabled=busy||!!client;$('token').disabled=busy||!!client;
+  $('disconnect').hidden=!client;$('disconnect').disabled=busy;$('admin-refresh').disabled=!client||busy;
+  $('connection-badge').textContent=client?'Connected':'Disconnected';$('workspace').hidden=!client;
+  $('progress').hidden=!busy;if(busy)$('progress').removeAttribute('value');
 }
-async function run(action,success) {
-  if (busy) return;busy=true;controls();
-  try {await action();if (success) status(success,'success');}
-  catch(error) {status(error.message,'error');}
-  finally {busy=false;controls();}
+async function run(action,success){
+  if(busy)return;busy=true;controls();
+  try{await action();if(success)status(success,'success');}
+  catch(error){status(error.message,'error');}
+  finally{busy=false;controls();}
 }
-function confirmRemoval(message) {
+function confirmRemoval(message){
   return new Promise(resolve=>{const dialog=$('confirm-dialog');$('confirm-message').textContent=message;dialog.returnValue='cancel';dialog.addEventListener('close',()=>resolve(dialog.returnValue==='remove'),{once:true});dialog.showModal();});
 }
-function render() {
-  $('admin-subjects').replaceChildren();$('admin-lessons').replaceChildren();
-  const selected=$('lesson-subject').value;
-  $('lesson-subject').replaceChildren(new Option('Choose a subject',''),...catalog.subjects.map(s=>new Option(s.name,s.id)));
-  if (catalog.subjects.some(s=>s.id===selected)) $('lesson-subject').value=selected;
-  if (!catalog.subjects.length) $('admin-subjects').append(node('p','No subjects yet. Add your first subject above.','muted'));
-  if (!catalog.lessons.length) $('admin-lessons').append(node('p','No published lessons yet. Choose a subject and share your first lesson.','muted'));
-  for (const s of catalog.subjects) {
-    const count=catalog.lessons.filter(l=>l.subjectId===s.id).length,row=node('div',undefined,'admin-item'),copy=node('div');
-    copy.append(node('strong',s.name),node('p',`${count} ${count===1?'lesson':'lessons'}`));
-    const remove=node('button','Remove','remove');remove.type='button';remove.setAttribute('aria-label',`Remove subject ${s.name}`);
-    remove.addEventListener('click',async()=>{
-      if (busy) return;
-      if (catalog.lessons.some(l=>l.subjectId===s.id)) {status('Remove this subject’s lessons before removing the subject.','error');return;}
-      if (!await confirmRemoval(`Remove the subject “${s.name}” from the public library?`)) return;
-      await run(async()=>{catalog=await client.publish({kind:'remove-subject',id:s.id},null,status);render();},'Subject removed from the public library.');
-    });row.append(copy,remove);$('admin-subjects').append(row);
+function removeButton(label,operation,blocked,success){
+  const button=node('button','Remove','remove');button.type='button';button.setAttribute('aria-label',`Remove ${label}`);
+  button.addEventListener('click',async()=>{
+    if(busy||!client)return;if(blocked){status(blocked,'error');return;}
+    if(!await confirmRemoval(`Remove ${label}?`))return;
+    await run(async()=>{catalog=await client.publish(operation,null,status);render();},success);
+  });return button;
+}
+function selectSubject(value){subjectId=value;chapterId='';render();}
+function render(){
+  if(!catalog)return;
+  if(!catalog.subjects.some(s=>s.id===subjectId))subjectId=catalog.subjects[0]?.id||'';
+  const chapters=catalog.chapters.filter(c=>c.subjectId===subjectId);
+  if(!chapters.some(c=>c.id===chapterId))chapterId=chapters[0]?.id||'';
+  for(const name of ['chapter-subject','lesson-subject']){
+    $(name).replaceChildren(new Option('Choose a subject',''),...catalog.subjects.map(s=>new Option(s.name,s.id)));$(name).value=subjectId;
   }
-  for (const l of [...catalog.lessons].sort((a,b)=>Date.parse(b.uploadedAt)-Date.parse(a.uploadedAt))) {
-    const row=node('div',undefined,'admin-item'),copy=node('div');copy.append(node('strong',l.title),node('p',`${catalog.subjects.find(s=>s.id===l.subjectId).name} · ${l.type.toUpperCase()} · ${formatSize(l.size)} · ${formatDate(l.uploadedAt)}`));
-    const remove=node('button','Remove','remove');remove.type='button';remove.setAttribute('aria-label',`Remove lesson ${l.title}`);
-    remove.addEventListener('click',async()=>{
-      if (busy || !await confirmRemoval(`Remove “${l.title}” and its document from the current public library?`)) return;
-      await run(async()=>{catalog=await client.publish({kind:'remove-lesson',id:l.id,path:l.path},null,status);render();},'Lesson and current document removed. Git history can retain earlier copies.');
-    });row.append(copy,remove);$('admin-lessons').append(row);
+  $('lesson-chapter').replaceChildren(new Option('Choose a chapter',''),...chapters.map(c=>new Option(c.name,c.id)));$('lesson-chapter').value=chapterId;
+  $('admin-subjects').replaceChildren();$('admin-chapters').replaceChildren();$('admin-lessons').replaceChildren();
+  if(!catalog.subjects.length)$('admin-subjects').append(node('p','Add your first subject.','muted'));
+  if(!chapters.length)$('admin-chapters').append(node('p',subjectId?'Add a chapter.':'Choose a subject first.','muted'));
+  for(const s of catalog.subjects){
+    const row=node('div',undefined,'admin-item'),select=node('button',s.name,`item-select${s.id===subjectId?' selected':''}`);select.type='button';select.setAttribute('aria-pressed',String(s.id===subjectId));select.addEventListener('click',()=>selectSubject(s.id));
+    const blocked=catalog.chapters.some(c=>c.subjectId===s.id)?'Remove this subject’s chapters first.':'';
+    row.append(select,removeButton(`subject “${s.name}”`,{kind:'remove-subject',id:s.id},blocked,'Subject removed.'));$('admin-subjects').append(row);
+  }
+  for(const c of chapters){
+    const row=node('div',undefined,'admin-item'),select=node('button',c.name,`item-select${c.id===chapterId?' selected':''}`);select.type='button';select.setAttribute('aria-pressed',String(c.id===chapterId));select.addEventListener('click',()=>{chapterId=c.id;render();});
+    const blocked=catalog.lessons.some(l=>l.chapterId===c.id)?'Remove this chapter’s documents first.':'';
+    row.append(select,removeButton(`chapter “${c.name}”`,{kind:'remove-chapter',id:c.id},blocked,'Chapter removed.'));$('admin-chapters').append(row);
+  }
+  const documents=catalog.lessons.filter(l=>l.chapterId===chapterId).sort((a,b)=>Date.parse(b.uploadedAt)-Date.parse(a.uploadedAt));
+  $('document-count').textContent=chapterId?`${documents.length} in ${chapters.find(c=>c.id===chapterId).name}`:'';
+  if(!documents.length)$('admin-lessons').append(node('p',chapterId?'No documents in this chapter.':'Choose a chapter above.','muted'));
+  for(const l of documents){
+    const row=node('div',undefined,'admin-item'),copy=node('div');copy.append(node('strong',l.title),node('p',`${l.type.toUpperCase()} · ${formatSize(l.size)} · ${formatDate(l.uploadedAt)}`));
+    row.append(copy,removeButton(`document “${l.title}”`,{kind:'remove-lesson',id:l.id,path:l.path},'','Document removed.'));$('admin-lessons').append(row);
   }
   controls();
 }
 $('connect-form').addEventListener('submit',event=>{
-  event.preventDefault();if (client||busy) return;
+  event.preventDefault();if(client||busy)return;
   let token=$('token').value.trim();$('token').value='';
-  if (!token.startsWith('github_pat_')) {status('Use a fine-grained personal access token from GitHub (beginning with github_pat_).','error');return;}
+  if(!token.startsWith('github_pat_')){status('Enter a fine-grained GitHub token.','error');return;}
   const candidate=new GitHubLibrary(token);token='';
-  run(async()=>{
-    status('Connecting to the public lesson-data repository…');
-    try {catalog=await candidate.connect();client=candidate;render();}
-    catch(error) {candidate.disconnect();throw error;}
-  },'Connected. Your token is held only in this page’s memory. You can now manage the library.');
+  run(async()=>{status('Connecting…');try{catalog=await candidate.connect();client=candidate;render();}catch(error){candidate.disconnect();throw error;}},'Connected. Your library is ready.');
 });
-function disconnect() {
-  client?.disconnect();client=null;catalog=null;$('token').value='';$('subject-form').reset();$('upload-form').reset();
-  $('lesson-subject').replaceChildren(new Option('Choose a subject',''));$('admin-subjects').replaceChildren(node('p','Connect to view subjects.','muted'));$('admin-lessons').replaceChildren(node('p','Connect to view published lessons.','muted'));controls();status('Disconnected. The token has been cleared from this page.');
+function disconnect(){
+  client?.disconnect();client=null;catalog=null;subjectId='';chapterId='';$('token').value='';
+  for(const name of ['subject-form','chapter-form','upload-form'])$(name).reset();
+  for(const name of ['admin-subjects','admin-chapters','admin-lessons'])$(name).replaceChildren();
+  controls();status('Disconnected. Token cleared.');
 }
 $('disconnect').addEventListener('click',disconnect);
 window.addEventListener('pagehide',()=>{client?.disconnect();client=null;$('token').value='';});
 window.addEventListener('pageshow',event=>{if(event.persisted)disconnect();});
 window.addEventListener('beforeunload',event=>{if(busy){event.preventDefault();event.returnValue='';}});
 $('subject-form').addEventListener('submit',event=>{
-  event.preventDefault();if(!client||busy)return;const name=$('subject-name').value.trim();
-  if(!name){status('Enter a subject name.','error');return;}
-  run(async()=>{catalog=await client.publish({kind:'add-subject',subject:{id:id(),name}},null,status);$('subject-form').reset();render();},'Subject added. It is now available in the public library.');
+  event.preventDefault();if(!client||busy)return;const name=$('subject-name').value.trim();if(!name){status('Enter a subject name.','error');return;}
+  run(async()=>{const subject={id:id(),name};catalog=await client.publish({kind:'add-subject',subject},null,status);subjectId=subject.id;chapterId='';$('subject-form').reset();render();},'Subject added. Now add a chapter.');
+});
+$('chapter-form').addEventListener('submit',event=>{
+  event.preventDefault();if(!client||busy)return;const name=$('chapter-name').value.trim(),parent=$('chapter-subject').value;
+  if(!name||!parent){status('Choose a subject and enter a chapter name.','error');return;}
+  run(async()=>{const chapter={id:id(),subjectId:parent,name};catalog=await client.publish({kind:'add-chapter',chapter},null,status);subjectId=parent;chapterId=chapter.id;$('chapter-form').reset();render();},'Chapter added. You can upload documents.');
 });
 $('upload-form').addEventListener('submit',event=>{
   event.preventDefault();if(!client||busy)return;
   run(async()=>{
-    const title=$('lesson-title').value.trim(),subjectId=$('lesson-subject').value,file=$('lesson-file').files[0];
-    if (!title || !subjectId) throw new Error('Enter a lesson title and choose a subject.');
-    status('Validating your document…');const type=await validateFile(file),lessonId=id();
-    const lesson={id:lessonId,subjectId,title,type,originalName:file.name,size:file.size,uploadedAt:new Date().toISOString(),path:`documents/${subjectId}/${lessonId}.${type}`};
-    catalog=await client.publish({kind:'upload',lesson},file,status);$('upload-form').reset();render();
-  },'Lesson published. Students on any device can see it after refreshing the library; GitHub’s public cache may take a few minutes to update.');
+    const title=$('lesson-title').value.trim(),parent=$('lesson-subject').value,chapter=$('lesson-chapter').value,file=$('lesson-file').files[0];
+    if(!title||!parent||!chapter)throw new Error('Choose a subject, chapter and document title.');
+    status('Checking document…');const type=await validateFile(file),lessonId=id();
+    const lesson={id:lessonId,subjectId:parent,chapterId:chapter,title,type,originalName:file.name,size:file.size,uploadedAt:new Date().toISOString(),path:`documents/${parent}/${chapter}/${lessonId}.${type}`};
+    catalog=await client.publish({kind:'upload',lesson},file,status);subjectId=parent;chapterId=chapter;$('upload-form').reset();render();
+  },'Published. Students can refresh to see it; GitHub caching may take a few minutes.');
 });
-$('admin-refresh').addEventListener('click',()=>run(async()=>{status('Refreshing the latest library…');catalog=(await client.snapshot()).catalog;render();},'Library refreshed.'));
+for(const name of ['chapter-subject','lesson-subject'])$(name).addEventListener('change',()=>selectSubject($(name).value));
+$('lesson-chapter').addEventListener('change',()=>{chapterId=$('lesson-chapter').value;render();});
+$('admin-refresh').addEventListener('click',()=>run(async()=>{status('Refreshing…');catalog=(await client.snapshot()).catalog;render();},'Library refreshed.'));
 controls();
