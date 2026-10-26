@@ -1,5 +1,5 @@
 import {node,id,validateFile,formatDate,formatSize} from './core.js';
-import {GitHubLibrary} from './github.js';
+import {CodeLibrary} from './code-access.js';
 
 const $=id=>document.getElementById(id);
 let client=null,catalog=null,busy=false,subjectId='',chapterId='';
@@ -7,9 +7,9 @@ function status(text,type=''){$('admin-status').className=`status ${type}`;$('ad
 function controls(){
   document.querySelectorAll('fieldset').forEach(f=>{f.disabled=!client||busy;});
   document.querySelectorAll('.remove,.item-select').forEach(b=>{b.disabled=!client||busy;});
-  $('connect-button').disabled=busy||!!client;$('token').disabled=busy||!!client;
+  $('connect-button').disabled=busy||!!client;$('access-code').disabled=busy||!!client;
   $('disconnect').hidden=!client;$('disconnect').disabled=busy;$('admin-refresh').disabled=!client||busy;
-  $('connection-badge').textContent=client?'Connected':'Disconnected';$('workspace').hidden=!client;
+  $('connection-badge').textContent=client?'Signed in':'Signed out';$('workspace').hidden=!client;
   $('progress').hidden=!busy;if(busy)$('progress').removeAttribute('value');
 }
 async function run(action,success){
@@ -63,19 +63,19 @@ function render(){
 }
 $('connect-form').addEventListener('submit',event=>{
   event.preventDefault();if(client||busy)return;
-  let token=$('token').value.trim();$('token').value='';
-  if(!token.startsWith('github_pat_')){status('Enter a fine-grained GitHub token.','error');return;}
-  const candidate=new GitHubLibrary(token);token='';
-  run(async()=>{status('Connecting…');try{catalog=await candidate.connect();client=candidate;render();}catch(error){candidate.disconnect();throw error;}},'Connected. Your library is ready.');
+  let code=$('access-code').value.trim();$('access-code').value='';
+  if(!/^[0-9]{4,12}$/.test(code)){status('Enter your access code.','error');return;}
+  const signingIn=CodeLibrary.signIn(code);code='';
+  run(async()=>{status('Signing in…');const candidate=await signingIn;try{catalog=await candidate.connect();client=candidate;render();}catch(error){candidate.disconnect();throw error;}},'Welcome, Tasnim.');
 });
 function disconnect(){
-  client?.disconnect();client=null;catalog=null;subjectId='';chapterId='';$('token').value='';
+  client?.disconnect();client=null;catalog=null;subjectId='';chapterId='';$('access-code').value='';
   for(const name of ['subject-form','chapter-form','upload-form'])$(name).reset();
   for(const name of ['admin-subjects','admin-chapters','admin-lessons'])$(name).replaceChildren();
-  controls();status('Disconnected. Token cleared.');
+  controls();status('Signed out.');
 }
 $('disconnect').addEventListener('click',disconnect);
-window.addEventListener('pagehide',()=>{client?.disconnect();client=null;$('token').value='';});
+window.addEventListener('pagehide',()=>{client?.disconnect();client=null;$('access-code').value='';});
 window.addEventListener('pageshow',event=>{if(event.persisted)disconnect();});
 window.addEventListener('beforeunload',event=>{if(busy){event.preventDefault();event.returnValue='';}});
 $('subject-form').addEventListener('submit',event=>{

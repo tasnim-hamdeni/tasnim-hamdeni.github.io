@@ -6,7 +6,7 @@ export class GitHubLibrary {
   constructor(token, request = fetch) { this.#token=token; this.request=(...args)=>request(...args); }
   disconnect() { this.#token=''; }
   async api(path, method='GET', body) {
-    if (!this.#token) throw new Error('Connect with your token before managing lessons.');
+    if (!this.#token) throw new Error('Connect with your access code before managing lessons.');
     let response;
     try {
       response=await this.request(`${repoRoot}${path}`,{method,headers:{Accept:'application/vnd.github+json',Authorization:`Bearer ${this.#token}`,'X-GitHub-Api-Version':'2022-11-28',...(body ? {'Content-Type':'application/json'} : {})},...(body?{body:JSON.stringify(body)}:{}),cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(180000)});
@@ -14,7 +14,7 @@ export class GitHubLibrary {
       throw new Error(method === 'PATCH' ? 'Publication could not be confirmed because the connection was interrupted. Refresh the library before retrying; the change may already be live.' : 'GitHub could not be reached or the request timed out. No publication has been confirmed. Check your connection and refresh before retrying.');
     }
     if (!response.ok) {
-      const messages={401:'The token is invalid or expired. Disconnect and enter a new fine-grained token.',403:'GitHub denied this request. Check Contents: Read and write, token approval, repository rules, and API rate limits.',404:'The repository, main branch, or catalog was not found, or this token has no access. Complete repository setup and check the selected repository.',409:'The library changed during publication.',422:'GitHub rejected the update. The library may have changed, or a repository rule may prevent this commit.'};
+      const messages={401:'Your session or classroom connection expired. Sign in again; if this continues, contact the site owner.',403:'Library access was denied. Please contact the site owner.',404:'The library could not be found. Please contact the site owner.',409:'The library changed during publication.',422:'GitHub rejected the update. The library may have changed, or a repository rule may prevent this commit.'};
       const error=new Error(messages[response.status] || `GitHub returned HTTP ${response.status}. The change has not been confirmed.`);
       error.status=response.status; throw error;
     }
