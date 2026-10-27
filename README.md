@@ -1,4 +1,4 @@
-# Tasnim Hamdeni · Resource room
+# Tasnim Hamdeni · Course resources
 
 Students: https://tasnim-hamdeni.github.io/
 
@@ -10,7 +10,7 @@ Public catalog and documents: https://github.com/tasnim-hamdeni/tasnim-lesson-da
 
 ## Student experience
 
-The prominent navy subject selector lists subjects from the public catalog, with a gold selected state, larger text and strong contrast. Selecting a subject shows its chapters and resources, with a chapter index, subject search, file-type filter, View and Download controls. PDF View opens viewer.html on this website, fetches the public file and renders it with the bundled Mozilla PDF.js reader (Apache 2.0). Page navigation, zoom and download are available; no browser PDF plugin or GitHub page is required. PPTX files download for use in presentation software. Each subject has a shareable URL. The layout adapts to phones and computers.
+The navy subject selector lists subjects from the public catalog. The student page contains subject navigation, chapters, search, file filters and document controls, without promotional text. Selecting a subject shows its chapters and resources, with a chapter index, subject search, file-type filter, View and Download controls. PDF View opens viewer.html on this website, fetches the public file and renders it with the bundled Mozilla PDF.js reader (Apache 2.0). Page navigation, zoom and download are available; no browser PDF plugin or GitHub page is required. PPTX files download for use in presentation software. Each subject has a shareable URL. The layout adapts to phones and computers.
 
 AI, Statistics and Algebra include example chapters and blank PDFs explicitly requested by the owner. Example files are labeled. They are layout examples, not teaching material, and can be removed through the teacher page.
 
@@ -21,9 +21,9 @@ The organization takes inspiration from topic collections on 3Blue1Brown and ord
 
 ## Tasnim’s tools
 
-Open the teacher URL and enter the privately supplied access code. Add a subject, add chapters inside it, and upload PDF or PPTX documents (maximum 50 MB / 50 MiB). New subjects automatically appear in the student menu. Refresh the student page after publishing; GitHub’s public cache can take a few minutes.
+Open the teacher URL and enter the privately supplied access code. Choose a subject, choose a chapter, then select Add document. The file name prefills an editable title. Use Add subject and Add chapter to create new courses. PDF and PPTX documents are supported (maximum 50 MB / 50 MiB). New subjects automatically appear in the student menu. Refresh the student page after publishing; GitHub’s public cache can take a few minutes.
 
-Delete a document after confirmation. Delete a chapter after removing its documents, and delete a subject after removing its chapters. Occupied parents are protected against accidental deletion.
+Delete buttons are provided beside each subject, chapter and document. A confirmation identifies the subject/chapter and counts its contents. Confirming a subject or chapter deletion also removes its confirmed contents. Removal proceeds in dependency order with progress; if interrupted, the current library is refreshed and the error is shown. Newly added concurrent contents are preserved and block parent deletion. Keep the page open until deletion finishes.
 
 Tasnim does not need a GitHub token or email/password login. Sessions remain only in page memory, expire after 8 hours and are revoked on sign-out. Failed code attempts are rate-limited. The access code is never embedded in source or this ZIP.
 

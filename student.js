@@ -2,13 +2,6 @@ import {node,readPublicCatalog,formatDate,formatSize,lessonURL} from './core.js'
 const $=id=>document.getElementById(id);
 let catalog=null,loading=false,selected='';
 $('year').textContent=new Date().getFullYear();
-const copyFor=name=>{
- const key=name.trim().toLowerCase();
- if(['ai','artificial intelligence'].includes(key))return {title:'Artificial intelligence',description:'Explore the ideas behind intelligent systems, one chapter at a time.',symbol:'ai',theme:'theme-ai'};
- if(key==='statistics')return {title:name,description:'Make sense of data. Build intuition. Put the methods into practice.',symbol:'σ',theme:'theme-statistics'};
- if(key==='algebra')return {title:name,description:'Build a strong foundation in equations, vectors and mathematical thinking.',symbol:'x²',theme:'theme-algebra'};
- return {title:name,description:'Course notes, slides and practice, organized by chapter.',symbol:'∑',theme:'theme-default'};
-};
 function empty(message){return node('div',message,'empty-state');}
 function chooseSubject(subjectId,push=true){
  selected=subjectId;$('search').value='';$('file-filter').value='';
@@ -18,7 +11,7 @@ function chooseSubject(subjectId,push=true){
 function documentRow(lesson){
  const row=node('article',undefined,'lesson-row'),copy=node('div',undefined,'lesson-copy'),heading=node('div',undefined,'resource-title');
  heading.append(node('h3',lesson.title));if(lesson.example===true)heading.append(node('span','Example','sample-badge'));
- copy.append(heading,node('p',`${lesson.type.toUpperCase()} · ${formatSize(lesson.size)} · ${lesson.example===true?'Blank example · ':''}${formatDate(lesson.uploadedAt)}`,'lesson-meta'));
+ copy.append(heading,node('p',`${lesson.type.toUpperCase()} · ${formatSize(lesson.size)} · ${formatDate(lesson.uploadedAt)}`,'lesson-meta'));
  const actions=node('div',undefined,'lesson-actions');
  const open=node('a','View PDF ↗','button secondary');open.href=`viewer.html?lesson=${encodeURIComponent(lesson.id)}`;open.target='_blank';open.rel='noopener noreferrer';open.setAttribute('aria-label',`View ${lesson.title} PDF`);
  const download=node('button','Download ↓','button');download.type='button';download.setAttribute('aria-label',`Download ${lesson.title}`);
@@ -38,8 +31,8 @@ function documentRow(lesson){
 function render(){
  if(!catalog)return;
  if(!catalog.subjects.some(s=>s.id===selected))selected=catalog.subjects[0]?.id||'';
- const subject=catalog.subjects.find(s=>s.id===selected),presentation=copyFor(subject?.name||'Your subjects');
- document.body.className=`student-page ${presentation.theme}`;
+ const subject=catalog.subjects.find(s=>s.id===selected);
+ document.body.className='student-page';
  document.title=subject?`${subject.name} · Tasnim Hamdeni`:'Resources · Tasnim Hamdeni';
  $('subject-nav').replaceChildren();
  for(const s of catalog.subjects){
@@ -47,17 +40,16 @@ function render(){
   if(s.id===selected)link.setAttribute('aria-current','page');
   link.addEventListener('click',event=>{if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();chooseSubject(s.id);});$('subject-nav').append(link);
  }
- $('breadcrumb-subject').textContent=subject?.name||'Subjects';$('course-title').textContent=subject?presentation.title:'Your resource room';$('course-description').textContent=subject?presentation.description:'Tasnim’s subjects will appear here soon.';$('course-symbol').textContent=presentation.symbol;
+ $('course-title').textContent=subject?.name||'Subjects';
  const allChapters=catalog.chapters.filter(c=>c.subjectId===selected),allDocuments=catalog.lessons.filter(l=>l.subjectId===selected);
  $('course-meta').replaceChildren(node('span',`${allChapters.length} ${allChapters.length===1?'chapter':'chapters'}`),node('span','·'),node('span',`${allDocuments.length} ${allDocuments.length===1?'resource':'resources'}`));
- $('example-notice').hidden=!allDocuments.some(l=>l.example===true);
  const query=$('search').value.trim().toLocaleLowerCase(),fileType=$('file-filter').value,contains=value=>value.toLocaleLowerCase().includes(query);
  const matches=new Map();
  for(const c of allChapters){const wholeChapter=!query||contains(c.name)||contains(subject.name);const documents=catalog.lessons.filter(l=>l.chapterId===c.id&&(!fileType||l.type===fileType)&&(wholeChapter||contains(l.title)));if(documents.length||(!fileType&&wholeChapter))matches.set(c.id,documents);}
  $('chapter-index').replaceChildren();$('lessons').replaceChildren();
  const matchedCount=[...matches.values()].reduce((total,docs)=>total+docs.length,0);$('result-count').textContent=`${matchedCount} ${matchedCount===1?'resource':'resources'}`;
  $('results-title').textContent='Chapters & resources';
- if(!matches.size){$('lessons').append(empty(query||fileType?'No matches. Try another search or file type.':!subject?'Subjects will appear here soon.':'No chapters yet.'));return;}
+ if(!matches.size){$('lessons').append(empty(query||fileType?'No matches. Try another search or file type.':!subject?'No subjects available.':'No chapters yet.'));return;}
  for(const [index,c] of allChapters.entries()){
   if(!matches.has(c.id))continue;
   const number=String(index+1).padStart(2,'0'),anchor=node('a',undefined,'chapter-index-link');anchor.href='#chapter-'+c.id;anchor.append(node('span',number),node('span',c.name));$('chapter-index').append(anchor);
@@ -70,7 +62,7 @@ function render(){
 async function load(){
  if(loading)return;loading=true;$('refresh').disabled=true;$('library-status').className='status';$('library-status').textContent='Loading resources…';
  try{catalog=await readPublicCatalog();if(!selected)selected=new URL(window.location.href).searchParams.get('subject')||'';render();$('library-status').textContent='';}
- catch(error){$('library-status').className='status error';$('library-status').textContent=error.message;if(!catalog)$('lessons').replaceChildren(empty('Please try again shortly.'));else $('library-status').textContent+=' Showing the last loaded version.';}
+ catch(error){$('library-status').className='status error';$('library-status').textContent=error.message;if(!catalog)$('lessons').replaceChildren(empty('Unable to load resources.'));else $('library-status').textContent+=' Showing the last loaded version.';}
  finally{loading=false;$('refresh').disabled=false;}
 }
 $('search').addEventListener('input',render);$('file-filter').addEventListener('change',render);$('refresh').addEventListener('click',load);
