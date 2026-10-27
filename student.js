@@ -1,69 +1,79 @@
 import {node,readPublicCatalog,formatDate,formatSize,lessonURL} from './core.js';
-
 const $=id=>document.getElementById(id);
-let catalog=null,loading=false;
+let catalog=null,loading=false,selected='';
 $('year').textContent=new Date().getFullYear();
-function empty(message) {return node('div',message,'empty-state');}
-function documentRow(lesson) {
-  const row=node('article',undefined,'lesson-row'),copy=node('div',undefined,'lesson-copy');
-  copy.append(node('h3',lesson.title),node('p',`${lesson.type.toUpperCase()} · ${formatSize(lesson.size)} · ${formatDate(lesson.uploadedAt)}`,'lesson-meta'));
-  const actions=node('div',undefined,'lesson-actions');
-  const open=node('a','Open ↗','button secondary');open.href=lessonURL(lesson,true);open.target='_blank';open.rel='noopener noreferrer';open.setAttribute('aria-label',`Open ${lesson.title}`);
-  const download=node('button','Download ↓','button');download.type='button';download.setAttribute('aria-label',`Download ${lesson.title}`);
-  download.addEventListener('click',async()=>{
-    download.disabled=true;download.textContent='Downloading…';
-    try {
-      const response=await fetch(lessonURL(lesson),{credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(180000)});
-      if (!response.ok) throw new Error('Download failed. Refresh and try again.');
-      const blob=await response.blob();
-      if (blob.size!==lesson.size) throw new Error('Incomplete download. Please try again.');
-      const url=URL.createObjectURL(blob),link=node('a');link.href=url;link.download=lesson.originalName.replace(/[\\/\x00-\x1f]/g,'_');document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
-      $('library-status').className='status success';$('library-status').textContent='Download ready.';
-    }catch(error){$('library-status').className='status error';$('library-status').textContent=error.name==='TimeoutError'?'Download timed out. Try again.':error.message;}
-    finally{download.disabled=false;download.textContent='Download ↓';}
-  });
-  actions.append(open,download);row.append(node('span',lesson.type.toUpperCase(),'file-icon'),copy,actions);return row;
+const copyFor=name=>{
+ const key=name.trim().toLowerCase();
+ if(['ai','artificial intelligence'].includes(key))return {title:'Artificial intelligence',description:'Explore the ideas behind intelligent systems, one chapter at a time.',symbol:'ai',theme:'theme-ai'};
+ if(key==='statistics')return {title:name,description:'Make sense of data. Build intuition. Put the methods into practice.',symbol:'σ',theme:'theme-statistics'};
+ if(key==='algebra')return {title:name,description:'Build a strong foundation in equations, vectors and mathematical thinking.',symbol:'x²',theme:'theme-algebra'};
+ return {title:name,description:'Course notes, slides and practice, organized by chapter.',symbol:'∑',theme:'theme-default'};
+};
+function empty(message){return node('div',message,'empty-state');}
+function chooseSubject(subjectId,push=true){
+ selected=subjectId;$('search').value='';$('file-filter').value='';
+ if(push){const url=new URL(window.location.href);url.searchParams.set('subject',subjectId);url.hash='';history.pushState(null,'',url);}
+ render();
 }
-function render() {
-  const query=$('search').value.trim().toLocaleLowerCase(),selected=$('subject-filter').value;
-  const contains=text=>text.toLocaleLowerCase().includes(query);
-  const chapterMatches=c=>!query || contains(c.name) || contains(catalog.subjects.find(s=>s.id===c.subjectId).name) || catalog.lessons.some(l=>l.chapterId===c.id&&contains(l.title));
-  const subjects=catalog.subjects.filter(s=>!query || contains(s.name) || catalog.chapters.some(c=>c.subjectId===s.id&&chapterMatches(c)));
-  $('subject-cards').replaceChildren();
-  for (const s of subjects) {
-    const count=catalog.chapters.filter(c=>c.subjectId===s.id).length;
-    const card=node('button',undefined,`subject-card${selected===s.id?' selected':''}`);card.type='button';card.setAttribute('aria-pressed',String(selected===s.id));
-    const copy=node('span');copy.append(node('span',s.name,'subject-name'),node('small',`${count} ${count===1?'chapter':'chapters'}`));
-    const symbol=node('span','◫','subject-icon');symbol.setAttribute('aria-hidden','true');
-    const arrow=node('span','→','arrow');arrow.setAttribute('aria-hidden','true');
-    card.append(symbol,copy,arrow);card.addEventListener('click',()=>{$('subject-filter').value=selected===s.id?'':s.id;render();});$('subject-cards').append(card);
-  }
-  $('results-title').textContent=selected?catalog.subjects.find(s=>s.id===selected)?.name||'Chapters':'Chapters';
-  const chapters=catalog.chapters.filter(c=>(!selected||c.subjectId===selected)&&chapterMatches(c));
-  $('result-count').textContent=chapters.length?`${chapters.length} ${chapters.length===1?'chapter':'chapters'}`:'';
-  $('lessons').replaceChildren();
-  if(!chapters.length){$('lessons').append(empty(query?'No matches. Try another search.':!catalog.subjects.length?'Lessons will appear here soon.':'No chapters yet.'));return;}
-  for(const [index,c] of chapters.entries()){
-    const section=node('details',undefined,'chapter');section.open=!!query||index===0;
-    const summary=node('summary'),copy=node('span'),name=node('strong',c.name);
-    const lessons=catalog.lessons.filter(l=>l.chapterId===c.id&&(!query||contains(l.title)||contains(c.name)||contains(catalog.subjects.find(s=>s.id===c.subjectId).name))).sort((a,b)=>Date.parse(b.uploadedAt)-Date.parse(a.uploadedAt));
-    copy.append(name);if(!selected)copy.append(node('small',catalog.subjects.find(s=>s.id===c.subjectId).name));
-    summary.append(copy,node('span',`${lessons.length} ${lessons.length===1?'document':'documents'}`,'chapter-count'));
-    const content=node('div',undefined,'chapter-content');
-    if(!lessons.length)content.append(empty('No documents yet.'));else content.append(...lessons.map(documentRow));
-    section.append(summary,content);$('lessons').append(section);
-  }
+function documentRow(lesson){
+ const row=node('article',undefined,'lesson-row'),copy=node('div',undefined,'lesson-copy'),heading=node('div',undefined,'resource-title');
+ heading.append(node('h3',lesson.title));if(lesson.example===true)heading.append(node('span','Example','sample-badge'));
+ copy.append(heading,node('p',`${lesson.type.toUpperCase()} · ${formatSize(lesson.size)} · ${lesson.example===true?'Blank example · ':''}${formatDate(lesson.uploadedAt)}`,'lesson-meta'));
+ const actions=node('div',undefined,'lesson-actions');
+ const open=node('a','View ↗','button secondary');open.href=lessonURL(lesson,true);open.target='_blank';open.rel='noopener noreferrer';open.setAttribute('aria-label',`View ${lesson.title} on GitHub`);
+ const download=node('button','Download ↓','button');download.type='button';download.setAttribute('aria-label',`Download ${lesson.title}`);
+ download.addEventListener('click',async()=>{
+  download.disabled=true;download.textContent='Downloading…';
+  try{
+   const response=await fetch(lessonURL(lesson),{credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(180000)});
+   if(!response.ok)throw new Error('Download failed. Refresh and try again.');
+   const blob=await response.blob();if(blob.size!==lesson.size)throw new Error('Incomplete download. Please try again.');
+   const url=URL.createObjectURL(blob),link=node('a');link.href=url;link.download=lesson.originalName.replace(/[\\/\x00-\x1f]/g,'_');document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+   $('library-status').className='status success';$('library-status').textContent='Download ready.';
+  }catch(error){$('library-status').className='status error';$('library-status').textContent=error.name==='TimeoutError'?'Download timed out. Try again.':error.message;}
+  finally{download.disabled=false;download.textContent='Download ↓';}
+ });
+ actions.append(open,download);const icon=node('span',lesson.type.toUpperCase(),'file-icon');icon.setAttribute('aria-hidden','true');row.append(icon,copy,actions);return row;
+}
+function render(){
+ if(!catalog)return;
+ if(!catalog.subjects.some(s=>s.id===selected))selected=catalog.subjects[0]?.id||'';
+ const subject=catalog.subjects.find(s=>s.id===selected),presentation=copyFor(subject?.name||'Your subjects');
+ document.body.className=`student-page ${presentation.theme}`;
+ document.title=subject?`${subject.name} · Tasnim Hamdeni`:'Resources · Tasnim Hamdeni';
+ $('subject-nav').replaceChildren();
+ for(const s of catalog.subjects){
+  const link=node('a',s.name,`subject-tab${s.id===selected?' active':''}`);const target=new URL('./',window.location.href);target.searchParams.set('subject',s.id);link.href=target.href;
+  if(s.id===selected)link.setAttribute('aria-current','page');
+  link.addEventListener('click',event=>{if(event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();chooseSubject(s.id);});$('subject-nav').append(link);
+ }
+ $('breadcrumb-subject').textContent=subject?.name||'Subjects';$('course-title').textContent=subject?presentation.title:'Your resource room';$('course-description').textContent=subject?presentation.description:'Tasnim’s subjects will appear here soon.';$('course-symbol').textContent=presentation.symbol;
+ const allChapters=catalog.chapters.filter(c=>c.subjectId===selected),allDocuments=catalog.lessons.filter(l=>l.subjectId===selected);
+ $('course-meta').replaceChildren(node('span',`${allChapters.length} ${allChapters.length===1?'chapter':'chapters'}`),node('span','·'),node('span',`${allDocuments.length} ${allDocuments.length===1?'resource':'resources'}`));
+ $('example-notice').hidden=!allDocuments.some(l=>l.example===true);
+ const query=$('search').value.trim().toLocaleLowerCase(),fileType=$('file-filter').value,contains=value=>value.toLocaleLowerCase().includes(query);
+ const matches=new Map();
+ for(const c of allChapters){const wholeChapter=!query||contains(c.name)||contains(subject.name);const documents=catalog.lessons.filter(l=>l.chapterId===c.id&&(!fileType||l.type===fileType)&&(wholeChapter||contains(l.title)));if(documents.length||(!fileType&&wholeChapter))matches.set(c.id,documents);}
+ $('chapter-index').replaceChildren();$('lessons').replaceChildren();
+ const matchedCount=[...matches.values()].reduce((total,docs)=>total+docs.length,0);$('result-count').textContent=`${matchedCount} ${matchedCount===1?'resource':'resources'}`;
+ $('results-title').textContent='Chapters & resources';
+ if(!matches.size){$('lessons').append(empty(query||fileType?'No matches. Try another search or file type.':!subject?'Subjects will appear here soon.':'No chapters yet.'));return;}
+ for(const [index,c] of allChapters.entries()){
+  if(!matches.has(c.id))continue;
+  const number=String(index+1).padStart(2,'0'),anchor=node('a',undefined,'chapter-index-link');anchor.href='#chapter-'+c.id;anchor.append(node('span',number),node('span',c.name));$('chapter-index').append(anchor);
+  const section=node('section',undefined,'chapter');section.id='chapter-'+c.id;section.setAttribute('aria-labelledby','heading-'+c.id);
+  const header=node('div',undefined,'chapter-heading'),title=node('h2',c.name);title.id='heading-'+c.id;const documents=matches.get(c.id);
+  header.append(node('span',number,'chapter-number'),title,node('span',`${documents.length} ${documents.length===1?'file':'files'}`,'chapter-count'));
+  const content=node('div',undefined,'chapter-content');if(!documents.length)content.append(empty('No resources yet.'));else content.append(...documents.map(documentRow));section.append(header,content);$('lessons').append(section);
+ }
 }
 async function load(){
-  if(loading)return;loading=true;$('refresh').disabled=true;$('library-status').className='status';$('library-status').textContent='Loading…';
-  try{
-    const next=await readPublicCatalog(),selected=$('subject-filter').value;catalog=next;
-    $('subject-filter').replaceChildren(new Option('All subjects',''),...catalog.subjects.map(s=>new Option(s.name,s.id)));
-    if(catalog.subjects.some(s=>s.id===selected))$('subject-filter').value=selected;
-    render();$('library-status').textContent='';
-  }catch(error){$('library-status').className='status error';$('library-status').textContent=error.message;if(!catalog)$('lessons').replaceChildren(empty('Please try again shortly.'));else $('library-status').textContent+=' Showing the last loaded version.';}
-  finally{loading=false;$('refresh').disabled=false;}
+ if(loading)return;loading=true;$('refresh').disabled=true;$('library-status').className='status';$('library-status').textContent='Loading resources…';
+ try{catalog=await readPublicCatalog();if(!selected)selected=new URL(window.location.href).searchParams.get('subject')||'';render();$('library-status').textContent='';}
+ catch(error){$('library-status').className='status error';$('library-status').textContent=error.message;if(!catalog)$('lessons').replaceChildren(empty('Please try again shortly.'));else $('library-status').textContent+=' Showing the last loaded version.';}
+ finally{loading=false;$('refresh').disabled=false;}
 }
-$('search').addEventListener('input',()=>{if(catalog)render();});$('subject-filter').addEventListener('change',()=>{if(catalog)render();});$('refresh').addEventListener('click',load);
+$('search').addEventListener('input',render);$('file-filter').addEventListener('change',render);$('refresh').addEventListener('click',load);
+window.addEventListener('popstate',()=>{if(catalog)chooseSubject(new URL(window.location.href).searchParams.get('subject')||catalog.subjects[0]?.id||'',false);});
 let lastRefresh=Date.now();document.addEventListener('visibilitychange',()=>{if(!document.hidden&&Date.now()-lastRefresh>60000){lastRefresh=Date.now();load();}});
 load();

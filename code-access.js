@@ -7,7 +7,9 @@ export class CodeLibrary extends GitHubLibrary{
  constructor(session,request=fetch){
   super(session,(url,options)=>{
    if(!url.startsWith(repoRoot))throw new Error('Invalid library request.');
-   return request(service()+'/api/github'+url.slice(repoRoot.length),{...options,redirect:'error'});
+   const headers={Authorization:options.headers.Authorization};
+   if(options.headers['Content-Type'])headers['Content-Type']=options.headers['Content-Type'];
+   return request(service()+'/api/github'+url.slice(repoRoot.length),{...options,headers,redirect:'error'});
   });
   this.#session=session;this.#request=(...args)=>request(...args);
  }

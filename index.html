@@ -1,19 +1,17 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Subjects, chapters and learning resources from Tasnim Hamdeni.">
+<meta name="description" content="Course notes, practice and chapter resources from Tasnim Hamdeni.">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'">
-<title>Lessons · Tasnim Hamdeni</title><link rel="icon" href="assets/mark.svg" type="image/svg+xml"><link rel="stylesheet" href="styles.css"><script type="module" src="student.js"></script>
-</head><body>
-<a class="skip" href="#library">Skip to subjects</a>
-<header class="site-header wrap"><a class="brand" href="./"><span class="brand-mark" aria-hidden="true">th<span>✦</span></span><span>Tasnim Hamdeni</span></a><span class="header-label">Student library</span></header>
-<main class="wrap student-main" id="library">
-<div class="welcome"><p class="eyebrow">LEARN AT YOUR PACE</p><h1>Your classroom,<br><em>anywhere.</em></h1><p class="intro">Choose a subject. Open a chapter. Start learning.</p><span class="welcome-flower" aria-hidden="true">✳</span></div>
-<div class="section-heading"><h2>Subjects</h2><button id="refresh" class="button secondary" type="button">↻ Refresh</button></div>
-<div class="toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search subjects, chapters or documents</span><input id="search" type="search" placeholder="Search…" maxlength="200"></label><label class="sr-only" for="subject-filter">Subject</label><select id="subject-filter"><option value="">All subjects</option></select></div>
-<div id="library-status" class="status" role="status" aria-live="polite">Loading…</div>
-<div id="subject-cards" class="subject-grid" aria-label="Browse subjects"></div>
-<div class="results-heading"><h2 id="results-title">Chapters</h2><span id="result-count" class="muted"></span></div>
-<div id="lessons" class="chapter-list" aria-live="polite"></div>
-</main><footer class="wrap"><p>© <span id="year"></span> Tasnim Hamdeni</p><span>Learn. Practise. Grow.</span></footer>
+<title>Course resources · Tasnim Hamdeni</title><link rel="icon" href="assets/mark.svg" type="image/svg+xml"><link rel="stylesheet" href="styles.css"><script type="module" src="student.js"></script>
+</head><body class="student-page">
+<a class="skip" href="#main">Skip to resources</a>
+<header class="student-header"><div class="wrap header-top"><a class="brand" href="./"><span class="brand-mark" aria-hidden="true">th</span><span>Tasnim Hamdeni<small>THE RESOURCE ROOM</small></span></a><span class="header-note"><span class="online-dot" aria-hidden="true"></span> A place to learn</span></div><div class="wrap"><nav id="subject-nav" class="subject-nav" aria-label="Subjects"></nav></div></header>
+<main class="wrap student-main" id="main">
+<div class="breadcrumb"><span>Resource room</span><span aria-hidden="true">/</span><span id="breadcrumb-subject">Subjects</span></div>
+<section class="course-heading" aria-labelledby="course-title"><div class="course-copy"><p class="eyebrow">COURSE COLLECTION</p><h1 id="course-title">Your subjects</h1><p id="course-description" class="course-description">Choose a subject to explore its resources.</p><div id="course-meta" class="course-meta"></div></div><div class="course-art" aria-hidden="true"><div class="art-grid"></div><span id="course-symbol">∑</span><span class="art-orbit"></span><span class="art-point point-one"></span><span class="art-point point-two"></span></div></section>
+<div class="resource-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">Search this subject</span><input id="search" type="search" placeholder="Search this subject…" maxlength="200"></label><div class="toolbar-actions"><label class="sr-only" for="file-filter">File type</label><select id="file-filter"><option value="">All file types</option><option value="pdf">PDF documents</option><option value="pptx">PowerPoint slides</option></select><button id="refresh" class="icon-button" type="button" aria-label="Refresh resources" title="Refresh resources">↻</button></div></div>
+<div id="library-status" class="status" role="status" aria-live="polite">Loading resources…</div>
+<div class="course-layout"><aside class="chapter-sidebar" aria-label="Chapter index"><p class="sidebar-label">IN THIS SUBJECT</p><nav id="chapter-index" aria-label="Jump to chapter"></nav><div class="sidebar-note"><span aria-hidden="true">↙</span><p>A little practice,<br>a little progress.</p></div></aside><section aria-labelledby="results-title"><div class="results-heading"><h2 id="results-title">Chapters & resources</h2><span id="result-count" class="muted"></span></div><p id="example-notice" class="example-notice" hidden><span class="sample-dot" aria-hidden="true"></span> Example PDFs are blank. Tasnim can replace them with course material.</p><div id="lessons" class="chapter-list" aria-live="polite"></div></section></div>
+</main><footer class="wrap"><p>© <span id="year"></span> Tasnim Hamdeni</p><span>Keep learning. Keep going.</span></footer>
 </body></html>

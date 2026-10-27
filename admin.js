@@ -3,7 +3,7 @@ import {CodeLibrary} from './code-access.js';
 
 const $=id=>document.getElementById(id);
 let client=null,catalog=null,busy=false,subjectId='',chapterId='';
-function status(text,type=''){$('admin-status').className=`status ${type}`;$('admin-status').textContent=text;}
+function status(text,type=''){$('admin-status').className=`status ${type}`;$('admin-status').textContent=text;if(type==='error')$('admin-status').scrollIntoView?.({block:'nearest'});}
 function controls(){
   document.querySelectorAll('fieldset').forEach(f=>{f.disabled=!client||busy;});
   document.querySelectorAll('.remove,.item-select').forEach(b=>{b.disabled=!client||busy;});
@@ -56,7 +56,7 @@ function render(){
   $('document-count').textContent=chapterId?`${documents.length} in ${chapters.find(c=>c.id===chapterId).name}`:'';
   if(!documents.length)$('admin-lessons').append(node('p',chapterId?'No documents in this chapter.':'Choose a chapter above.','muted'));
   for(const l of documents){
-    const row=node('div',undefined,'admin-item'),copy=node('div');copy.append(node('strong',l.title),node('p',`${l.type.toUpperCase()} · ${formatSize(l.size)} · ${formatDate(l.uploadedAt)}`));
+    const row=node('div',undefined,'admin-item'),copy=node('div');copy.append(node('strong',l.title),node('p',`${l.type.toUpperCase()} · ${l.example?'Blank example · ':''}${formatSize(l.size)} · ${formatDate(l.uploadedAt)}`));
     row.append(copy,removeButton(`document “${l.title}”`,{kind:'remove-lesson',id:l.id,path:l.path},'','Document removed.'));$('admin-lessons').append(row);
   }
   controls();
