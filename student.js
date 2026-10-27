@@ -20,7 +20,7 @@ function documentRow(lesson){
  heading.append(node('h3',lesson.title));if(lesson.example===true)heading.append(node('span','Example','sample-badge'));
  copy.append(heading,node('p',`${lesson.type.toUpperCase()} · ${formatSize(lesson.size)} · ${lesson.example===true?'Blank example · ':''}${formatDate(lesson.uploadedAt)}`,'lesson-meta'));
  const actions=node('div',undefined,'lesson-actions');
- const open=node('a','View ↗','button secondary');open.href=lessonURL(lesson,true);open.target='_blank';open.rel='noopener noreferrer';open.setAttribute('aria-label',`View ${lesson.title} on GitHub`);
+ const open=node('a','View PDF ↗','button secondary');open.href=`viewer.html?lesson=${encodeURIComponent(lesson.id)}`;open.target='_blank';open.rel='noopener noreferrer';open.setAttribute('aria-label',`View ${lesson.title} PDF`);
  const download=node('button','Download ↓','button');download.type='button';download.setAttribute('aria-label',`Download ${lesson.title}`);
  download.addEventListener('click',async()=>{
   download.disabled=true;download.textContent='Downloading…';
@@ -33,7 +33,7 @@ function documentRow(lesson){
   }catch(error){$('library-status').className='status error';$('library-status').textContent=error.name==='TimeoutError'?'Download timed out. Try again.':error.message;}
   finally{download.disabled=false;download.textContent='Download ↓';}
  });
- actions.append(open,download);const icon=node('span',lesson.type.toUpperCase(),'file-icon');icon.setAttribute('aria-hidden','true');row.append(icon,copy,actions);return row;
+ if(lesson.type==='pdf')actions.append(open);actions.append(download);const icon=node('span',lesson.type.toUpperCase(),'file-icon');icon.setAttribute('aria-hidden','true');row.append(icon,copy,actions);return row;
 }
 function render(){
  if(!catalog)return;

@@ -10,7 +10,7 @@ Public catalog and documents: https://github.com/tasnim-hamdeni/tasnim-lesson-da
 
 ## Student experience
 
-The top menu lists subjects from the public catalog. Selecting a subject shows its chapters and resources, with a chapter index, subject search, file-type filter, View and Download controls. Each subject has a shareable URL. The layout adapts to phones and computers.
+The prominent navy subject selector lists subjects from the public catalog, with a gold selected state, larger text and strong contrast. Selecting a subject shows its chapters and resources, with a chapter index, subject search, file-type filter, View and Download controls. PDF View opens viewer.html on this website, fetches the public file and renders it with the bundled Mozilla PDF.js reader (Apache 2.0). Page navigation, zoom and download are available; no browser PDF plugin or GitHub page is required. PPTX files download for use in presentation software. Each subject has a shareable URL. The layout adapts to phones and computers.
 
 AI, Statistics and Algebra include example chapters and blank PDFs explicitly requested by the owner. Example files are labeled. They are layout examples, not teaching material, and can be removed through the teacher page.
 

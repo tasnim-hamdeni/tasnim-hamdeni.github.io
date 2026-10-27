@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+<title>PDF viewer · Tasnim Hamdeni</title><link rel="icon" href="assets/mark.svg" type="image/svg+xml"><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="contrast.css"><script type="module" src="viewer.js"></script>
+</head><body class="viewer-page">
+<header class="viewer-toolbar"><div><a id="back-link" class="viewer-back" href="./">← Back to resources</a><h1 id="document-title">PDF viewer</h1><p id="document-details"></p></div><div class="viewer-actions"><a id="download-pdf" class="button" hidden>Download ↓</a></div></header>
+<main class="viewer-main"><p id="viewer-status" class="status" role="status" aria-live="polite">Loading PDF…</p><p id="blank-notice" class="viewer-notice" hidden>Blank example PDF — no course content yet.</p><section id="pdf-reader" class="pdf-reader" aria-label="PDF reader" hidden><div class="pdf-controls"><button id="previous-page" class="button secondary" aria-label="Previous page">←</button><span id="page-count" role="status" aria-live="polite"></span><button id="next-page" class="button secondary" aria-label="Next page">→</button><label for="pdf-zoom" class="sr-only">Zoom</label><select id="pdf-zoom"><option value="1">Fit width</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select></div><div class="pdf-surface" id="pdf-surface"><canvas id="pdf-canvas" role="img" aria-label="PDF page" aria-describedby="page-text"></canvas></div><p id="page-text" class="sr-only"></p></section></main>
+</body></html>
