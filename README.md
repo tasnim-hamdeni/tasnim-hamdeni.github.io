@@ -1,55 +1,11 @@
-# Tasnim Hamdeni · Course resources
+# Tasnim Classroom
 
-Students: https://tasnim-hamdeni.github.io/
-
+Student: https://tasnim-hamdeni.github.io/
 Teacher: https://tasnim-hamdeni.github.io/tasnim/
+Backend: https://tasnim-classroom-service.chamseddine.chatgpt.site/
 
-Website repository: https://github.com/tasnim-hamdeni/tasnim-hamdeni.github.io
+Students use personal classroom codes created by Tasnim. Tasnim uses her existing teacher code. Codes and sessions stay in page memory; private student data is held in D1, never in this public repository. New private files use Google Drive after the owner's one-time connection in Settings. Neither students nor Tasnim need a GitHub token for everyday use.
 
-Public catalog and documents: https://github.com/tasnim-hamdeni/tasnim-lesson-data
+Historical public resources remain in tasnim-hamdeni/tasnim-lesson-data. The original public library is preserved at public-resources.html. Those previously public documents cannot be made private retroactively. The new private classroom imports the existing courses without deleting GitHub files.
 
-## Student experience
-
-The navy subject selector lists subjects from the public catalog. The student page contains subject navigation, chapters, search, file filters and document controls, without promotional text. Selecting a subject shows its chapters and resources, with a chapter index, subject search, file-type filter, View and Download controls. PDF View opens viewer.html on this website, fetches the public file and renders it with the bundled Mozilla PDF.js reader (Apache 2.0). Page navigation, zoom and download are available; no browser PDF plugin or GitHub page is required. PPTX files download for use in presentation software. Each subject has a shareable URL. The layout adapts to phones and computers.
-
-AI, Statistics and Algebra include example chapters and blank PDFs explicitly requested by the owner. Example files are labeled. They are layout examples, not teaching material, and can be removed through the teacher page.
-
-The organization takes inspiration from topic collections on 3Blue1Brown and ordered resources on StatQuest; no course content was copied:
-
-- https://www.3blue1brown.com/?topic=linear-algebra
-- https://statquest.org/video_index.html
-
-## Tasnim’s tools
-
-Open the teacher URL and enter the privately supplied access code. Choose a subject, choose a chapter, then select Add document. The file name prefills an editable title. Use Add subject and Add chapter to create new courses. PDF and PPTX documents are supported (maximum 50 MB / 50 MiB). New subjects automatically appear in the student menu. Refresh the student page after publishing; GitHub’s public cache can take a few minutes.
-
-Delete buttons are provided beside each subject, chapter and document. A confirmation identifies the subject/chapter and counts its contents. Confirming a subject or chapter deletion also removes its confirmed contents. Removal proceeds in dependency order with progress; if interrupted, the current library is refreshed and the error is shown. Newly added concurrent contents are preserved and block parent deletion. Keep the page open until deletion finishes.
-
-Tasnim does not need a GitHub token or email/password login. Sessions remain only in page memory, expire after 8 hours and are revoked on sign-out. Failed code attempts are rate-limited. The access code is never embedded in source or this ZIP.
-
-All subjects, titles and documents are public. Never upload private student information. Removed content may remain in Git history, caches and downloaded copies.
-
-## Owner connection
-
-Owner setup: https://tasnim-classroom-service.beigepear256.chatgpt.site/
-
-The owner connects storage once. Sign in with the access code and enter an expiring fine-grained GitHub token restricted to tasnim-hamdeni/tasnim-lesson-data, Contents: Read and write. Metadata read access is automatic. Leave other permissions unset. Enter credentials only on the owner form, never in chat or source files. Reconnect there when a credential expires or is replaced.
-
-The service encrypts the repository credential in its server database and never returns it to browsers. Only fixed publishing routes to the lesson-data repository are permitted. ACCESS_CODE and TOKEN_KEY are secret runtime settings in the service hosting platform. Keep its .openai/hosting.json project_id unchanged.
-
-## Source, hosting and checks
-
-GitHub Pages publishes site/ files from the website repository’s main branch, root folder, with no custom domain. /admin.html forwards to /tasnim/. teacher-service/ contains the deployed authentication/publishing service.
-
-catalog.json stores subjects, chapters and document metadata (the document array is named lessons for compatibility). Documents use documents/<subject-id>/<chapter-id>/<unique-id>.pdf or .pptx. Uploads commit documents and catalog together. Concurrent updates are merged without forcing the branch; deleted parents cancel conflicting uploads. Version 1 catalogs migrate safely without changing existing document paths.
-
-The lesson-data folder in the ZIP contains only the requested examples. Never overwrite a live catalog with this starter after Tasnim begins adding her own content.
-
-- npm ci, then npm test: website/catalog/DOM checks.
-- npm run preview: local student and teacher layout preview.
-- With Node.js 22.13+: node --test teacher-service/service.test.mjs checks server authentication and proxy safety.
-- node scripts/verify-public.mjs compares public files and validates the catalog.
-- node scripts/verify-public-dom.mjs checks deployed modules in a DOM emulator.
-- python scripts/package-source.py rebuilds the source ZIP and scans for credentials.
-
-See TEST-REPORT.md and deployment-status.json for verification evidence.
+This free test version has website announcements; email delivery and annual automation are deferred. Native project tables support basic spreadsheet columns rather than arbitrary Excel formulas. The complete source ZIP includes the backend, tests, migration guide, and setup instructions. No credentials belong in commits or the ZIP.

@@ -3,6 +3,6 @@ export const config = Object.freeze({
   repository: 'tasnim-lesson-data',
   branch: 'main',
   catalogPath: 'catalog.json',
-  adminService: 'https://tasnim-classroom-service.beigepear256.chatgpt.site',
+  adminService: 'https://tasnim-classroom-service.chamseddine.chatgpt.site',
   maxUploadBytes: 50 * 1024 * 1024,
 });
