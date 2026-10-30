@@ -10,12 +10,14 @@
 
 Tasnim opens her teacher URL and enters her existing private teacher code. Normal teaching requires no GitHub token or Google sign-in.
 
-1. **Courses:** select a course, add chapters, upload PDF/PPTX documents, then use Edit / publish. New chapters/documents start hidden. Scheduled publishing is available. Course removal archives it; archived courses can be restored. Chapter/document removal hides content and preserves stored files for history/export.
+Start at **My courses**. Open a course, open a chapter, then choose **Upload document**. Open **Students & activities** inside a course for its student and teaching tools. Secondary actions are inside **Course options**, **Chapter options**, and the relevant item options. Settings stays separate.
+
+1. **Courses:** add chapters, upload PDF/PPTX documents, then publish the intended chapter and documents. New chapters/documents start hidden. Scheduled publishing is available. Course removal archives it; archived courses can be restored. Chapter/document removal hides content and preserves stored files for history/export.
 2. **Students:** add individually or import CSV/XLSX with First name, Last name, Email headers. Preview before saving. Save newly issued codes privately and give each student only their own code. Search, transfer, deactivate, export and regenerate codes here. Each student has one course per academic year.
 3. **Announcements:** draft, target courses, publish/schedule, attach files and see read counts. Email delivery is off.
 4. **Attendance:** create a session, mark the roster, save a draft or finalize. Students see only their own finalized records. Export XLSX or Print / Save as PDF. Settings controls calculation and timezone.
 5. **Assignments:** set deadlines, file limits, group/individual rules, replacement and late-work options. Review submitted/missing work, private files, feedback/grades and ZIP downloads.
-6. **Projects:** create/import a basic column template, assign independent course/year copies, publish, set deadlines/extensions and review registrations. Protected/teacher-only fields, revision checks, history and teacher restore are supported. Refresh to see classmates' saved changes.
+6. **Projects:** choose Add project table, create/import a table or reuse a saved template, then publish and set deadlines/extensions. New tables are assigned to the selected course automatically; master templates remain reusable. Protected/teacher-only fields, revision checks, history and teacher restore are supported. Refresh to see classmates' saved changes.
 7. **Settings:** academic years, attendance policy, storage status and private database export. Technical owner connection controls are collapsed separately.
 
 Students enter their personal code at the student URL. The assigned course opens directly. Sessions remain in page memory and expire after eight hours. Refreshing requires sign-in again. The backend checks enrollment, active year, deactivation and code version on every request.

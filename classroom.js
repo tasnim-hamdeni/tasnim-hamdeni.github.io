@@ -91,7 +91,11 @@ const help = (text) => el("p", { class: "help" }, text);
 const size = (value) => {
   if (value < 1048576) return Math.ceil(value / 1024) + " KB";
   const unit = Math.min(4, Math.floor(Math.log(value) / Math.log(1024)));
-  return (value / 1024 ** unit).toFixed(1) + " " + ["B", "KB", "MB", "GB", "TB"][unit];
+  return (
+    (value / 1024 ** unit).toFixed(1) +
+    " " +
+    ["B", "KB", "MB", "GB", "TB"][unit]
+  );
 };
 const timezone = () =>
   state?.settings?.timezone || state?.timezone || "Africa/Lagos";
@@ -363,6 +367,11 @@ function confirmAction(title, text, fn) {
   );
 }
 function login() {
+  if (teacher) {
+    const brand = document.querySelector(".brand");
+    brand.onclick = null;
+    brand.href = "./";
+  }
   authEpoch++;
   state = null;
   sessionActions.replaceChildren();
@@ -423,74 +432,90 @@ async function refresh() {
   render();
   msg();
 }
+let teacherView = "home";
+function teacherGo(view, selectedCourse = courseId, selectedChapter = null) {
+  msg();
+  teacherView = view;
+  courseId = selectedCourse;
+  chapterId = selectedChapter;
+  const path =
+    view === "home"
+      ? "courses"
+      : view === "settings"
+        ? "settings"
+        : "courses/" +
+          encodeURIComponent(courseId) +
+          "/" +
+          view +
+          (view === "chapter" ? "/" + encodeURIComponent(chapterId) : "");
+  history.pushState({ teacherView, courseId, chapterId }, "", "#" + path);
+  render();
+}
+function readTeacherRoute() {
+  if (!teacher) return;
+  const parts = location.hash.slice(1).split("/");
+  try {
+    teacherView =
+      parts[0] === "settings"
+        ? "settings"
+        : parts[1]
+          ? parts[2] || "course"
+          : "home";
+    if (parts[1]) courseId = decodeURIComponent(parts[1]);
+    chapterId = parts[3] ? decodeURIComponent(parts[3]) : null;
+  } catch {
+    teacherView = "home";
+  }
+}
+window.addEventListener("popstate", () => {
+  readTeacherRoute();
+  if (teacher && state) render();
+});
+readTeacherRoute();
+async function leaveClassroom() {
+  authEpoch++;
+  try {
+    await signOut();
+  } finally {
+    issuedCodes = [];
+    importRows = [];
+    document.querySelectorAll("dialog").forEach((d) => d.close());
+    login();
+  }
+}
 function render() {
+  if (teacher) {
+    renderTeacher();
+    return;
+  }
   sessionActions.replaceChildren(
     button("Refresh", refresh, "secondary small"),
-    button(
-      "Sign out",
-      async () => {
-        authEpoch++;
-        try {
-          await signOut();
-        } finally {
-          issuedCodes = [];
-          importRows = [];
-          document.querySelectorAll("dialog").forEach((d) => d.close());
-          login();
-        }
-      },
-      "secondary small",
-    ),
+    button("Sign out", leaveClassroom, "secondary small"),
   );
-  app.replaceChildren();
-  const title = teacher ? "Classroom" : state.course.name;
-  const year = teacher
-    ? field("year", "Academic year", "select", yearId, yearOptions())
-    : badge(state.year.label);
-  if (teacher)
-    year.querySelector("select").addEventListener("change", (e) =>
-      run(async () => {
-        yearId = e.target.value;
-        courseId = null;
-        await refresh();
-      }),
-    );
-  app.append(
+  app.replaceChildren(
     el(
       "div",
       { class: "toolbar" },
       el(
         "div",
         {},
-        el("h1", {}, title),
-        teacher
-          ? help("Times: " + timezone())
-          : help(state.student.firstName + " " + state.student.lastName),
+        el("h1", {}, state.course.name),
+        help(state.student.firstName + " " + state.student.lastName),
       ),
-      year,
+      badge(state.year.label),
     ),
   );
-  const tabs = teacher
-    ? [
-        ["courses", "Courses"],
-        ["students", "Students"],
-        ["announcements", "Announcements"],
-        ["attendance", "Attendance"],
-        ["assignments", "Assignments"],
-        ["projects", "Projects"],
-        ["settings", "Settings"],
-      ]
-    : [
-        ["resources", "Resources"],
-        ["announcements", "Announcements"],
-        ["assignments", "Assignments"],
-        ["projects", "Projects"],
-        ["attendance", "Attendance"],
-      ];
+  const tabs = [
+    ["resources", "Resources"],
+    ["announcements", "Announcements"],
+    ["assignments", "Assignments"],
+    ["projects", "Projects"],
+    ["attendance", "Attendance"],
+  ];
   app.append(
     el(
       "nav",
-      { class: "tabs", "aria-label": teacher ? "Teacher tools" : "Classroom" },
+      { class: "tabs", "aria-label": "Classroom" },
       tabs.map(([id, label]) =>
         el(
           "button",
@@ -502,9 +527,7 @@ function render() {
             },
           },
           label +
-            (id === "announcements" &&
-            !teacher &&
-            state.announcements.some((a) => !a.read)
+            (id === "announcements" && state.announcements.some((a) => !a.read)
               ? " •"
               : ""),
         ),
@@ -513,182 +536,369 @@ function render() {
   );
   const view = el("div", { id: "view" });
   app.append(view);
-  if (teacher)
-    ({
-      courses: teacherCourses,
-      students: teacherStudents,
-      announcements: teacherAnnouncements,
-      attendance: teacherAttendance,
-      assignments: teacherAssignments,
-      projects: teacherProjects,
-      settings: teacherSettings,
-    })[tab](view);
-  else
-    ({
-      resources: studentResources,
-      announcements: studentAnnouncements,
-      assignments: studentAssignments,
-      projects: studentProjects,
-      attendance: studentAttendance,
-    })[tab](view);
+  ({
+    resources: studentResources,
+    announcements: studentAnnouncements,
+    assignments: studentAssignments,
+    projects: studentProjects,
+    attendance: studentAttendance,
+  })[tab](view);
 }
-function courseNav(view) {
-  view.append(
-    el(
-      "nav",
-      { class: "course-nav", "aria-label": "Courses" },
-      state.courses
-        .filter((c) => !c.archived)
-        .map((c) =>
-          el(
-            "button",
-            {
-              "aria-current": courseId === c.id ? "page" : undefined,
-              onclick: () => {
-                courseId = c.id;
-                chapterId = null;
-                render();
-              },
+function moreActions(label, choices) {
+  return button(
+    label,
+    () => {
+      const content = el("div", { class: "choice-list" });
+      const dialog = modal(label, content);
+      for (const choice of choices.filter(Boolean))
+        content.append(
+          button(
+            choice.label,
+            async () => {
+              dialog.close();
+              await choice.run();
             },
-            c.name,
+            choice.kind || "secondary",
           ),
-        ),
-    ),
+        );
+    },
+    "secondary small",
   );
 }
-function teacherCourses(view) {
-  courseNav(view);
-  const selected = state.courses.find((c) => c.id === courseId);
-  view.append(
-    actions(
-      button("+ Add course", () => courseForm()),
-      selected ? button("Rename course", () => courseForm(selected)) : null,
-      selected
-        ? button("Copy to another year", () => duplicateCourse(selected))
-        : null,
-      selected
-        ? button("Student preview", () =>
-            run(async () => {
-              const preview = await api(
-                "/preview?courseId=" + encodeURIComponent(selected.id),
+function teacherCard(title, description, fn) {
+  return el(
+    "button",
+    { type: "button", class: "teacher-card", onclick: () => run(fn) },
+    el("span", { class: "teacher-card-title" }, title),
+    description
+      ? el("span", { class: "teacher-card-detail" }, description)
+      : null,
+    el("span", { class: "teacher-card-arrow", "aria-hidden": "true" }, "→"),
+  );
+}
+function teacherCrumbs(course, chapter) {
+  const crumbs = el(
+    "nav",
+    { class: "teacher-crumbs", "aria-label": "Location" },
+    button("My courses", () => teacherGo("home"), "text-button"),
+  );
+  if (course)
+    crumbs.append(
+      el("span", { "aria-hidden": "true" }, "/"),
+      button(course.name, () => teacherGo("course", course.id), "text-button"),
+    );
+  if (chapter)
+    crumbs.append(
+      el("span", { "aria-hidden": "true" }, "/"),
+      el("span", {}, chapter.name),
+    );
+  return crumbs;
+}
+function renderTeacher() {
+  document.body.classList.add("guided-teacher");
+  sessionActions.replaceChildren(
+    button("Sign out", leaveClassroom, "secondary small"),
+  );
+  const brand = document.querySelector(".brand");
+  brand.onclick = (e) => {
+    e.preventDefault();
+    teacherGo("home");
+  };
+  app.replaceChildren();
+  const course = state.courses.find((c) => c.id === courseId && !c.archived);
+  if (!["home", "settings"].includes(teacherView) && !course)
+    teacherView = "home";
+  const view = el("div", { id: "view" });
+  if (teacherView === "home") {
+    app.append(
+      el(
+        "div",
+        { class: "toolbar" },
+        el(
+          "div",
+          {},
+          el("h1", {}, "My courses"),
+          el("span", { class: "meta" }, state.year.label),
+        ),
+        button("+ Add course", () => courseForm(), "primary"),
+      ),
+      view,
+    );
+    const courses = state.courses.filter((c) => !c.archived);
+    view.append(
+      courses.length
+        ? el(
+            "div",
+            { class: "teacher-card-grid" },
+            courses.map((c) => {
+              const chapters = state.chapters.filter(
+                  (ch) => ch.course_id === c.id,
+                ),
+                ids = new Set(chapters.map((ch) => ch.id)),
+                count = state.documents.filter((d) =>
+                  ids.has(d.chapter_id),
+                ).length;
+              return teacherCard(
+                c.name,
+                countLabel(chapters.length, "chapter") +
+                  " · " +
+                  countLabel(count, "document"),
+                () => teacherGo("course", c.id),
               );
-              const body = el("div");
-              resourceList(body, preview);
-              modal(selected.name + " · Student preview", body, true);
             }),
           )
-        : null,
-      selected
-        ? button(
-            "Remove course",
-            () =>
-              confirmAction(
-                "Remove course?",
-                "The course will be archived. Its files, students, and history are preserved.",
-                () =>
-                  saveRefresh("courses.archive", {
-                    id: selected.id,
-                    archived: true,
-                  }),
+        : empty("Add your first course."),
+    );
+    const archived = state.courses.filter((c) => c.archived);
+    if (archived.length)
+      view.append(
+        el(
+          "details",
+          { class: "settings-section" },
+          el("summary", {}, "Archived courses"),
+          archived.map((c) =>
+            el(
+              "div",
+              { class: "resource" },
+              c.name,
+              button("Restore", () =>
+                saveRefresh("courses.archive", { id: c.id, archived: false }),
               ),
-            "danger",
-          )
-        : null,
-    ),
-  );
-  const archived = state.courses.filter((c) => c.archived);
-  if (archived.length)
-    view.append(
-      el(
-        "details",
-        { class: "details" },
-        el("summary", {}, "Archived courses"),
-        archived.map((c) =>
-          el(
-            "div",
-            { class: "resource" },
-            c.name,
-            button("Restore", () =>
-              saveRefresh("courses.archive", { id: c.id, archived: false }),
             ),
           ),
+        ),
+      );
+    view.append(
+      el(
+        "div",
+        { class: "teacher-home-footer" },
+        button("Settings", () => teacherGo("settings"), "text-button"),
+      ),
+    );
+    return;
+  }
+  if (teacherView === "settings") {
+    app.append(
+      teacherCrumbs(),
+      el("h1", { class: "teacher-page-title" }, "Settings"),
+      view,
+    );
+    teacherSettings(view);
+    return;
+  }
+  const chapter =
+    teacherView === "chapter"
+      ? state.chapters.find(
+          (c) => c.id === chapterId && c.course_id === course.id,
+        )
+      : null;
+  if (teacherView === "chapter" && !chapter) teacherView = "course";
+  app.append(teacherCrumbs(course, chapter), view);
+  if (teacherView === "course" || teacherView === "chapter") {
+    teacherCourses(view);
+    return;
+  }
+  if (teacherView === "tools") {
+    view.append(
+      el("h1", { class: "teacher-page-title" }, "Students & activities"),
+      el(
+        "div",
+        { class: "teacher-card-grid" },
+        [
+          ["students", "Students", "Names, access codes and enrollment"],
+          ["announcements", "Announcements", "Messages for this course"],
+          ["attendance", "Attendance", "Sessions and attendance records"],
+          ["assignments", "Assignments", "Homework and submitted files"],
+          ["projects", "Project tables", "Shared project registrations"],
+        ].map(([id, title, description]) =>
+          teacherCard(title, description, () => teacherGo(id, course.id)),
         ),
       ),
     );
-  if (!selected) {
-    view.append(empty("Add a course to begin."));
     return;
   }
-  const chapters = state.chapters.filter((c) => c.course_id === courseId);
-  if (!chapters.some((c) => c.id === chapterId)) chapterId = chapters[0]?.id;
-  const list = el(
-    "div",
-    { class: "list" },
-    chapters.map((c) =>
-      el(
-        "button",
-        {
-          class: "chapter-button",
-          "aria-current": c.id === chapterId ? "page" : undefined,
-          onclick: () => {
-            chapterId = c.id;
-            render();
-          },
-        },
-        c.name,
-        " ",
-        badge(c.status),
+  view.append(
+    el(
+      "div",
+      { class: "teacher-context-return" },
+      button(
+        "← Students & activities",
+        () => teacherGo("tools", course.id),
+        "text-button",
       ),
     ),
   );
-  const aside = el(
-    "aside",
-    {},
-    heading(
-      "Chapters",
-      button("+ Add", () => chapterForm()),
-    ),
-    list,
+  const tools = {
+    students: teacherStudents,
+    announcements: teacherAnnouncements,
+    attendance: teacherAttendance,
+    assignments: teacherAssignments,
+    projects: teacherProjects,
+  };
+  if (tools[teacherView]) tools[teacherView](view);
+  else teacherGo("course", course.id);
+}
+function countLabel(count, word) {
+  return count + " " + word + (count === 1 ? "" : "s");
+}
+function visibilityBadge(item) {
+  return el(
+    "span",
+    { class: "badge " + item.status },
+    item.status === "published"
+      ? "Visible"
+      : item.status === "scheduled"
+        ? "Scheduled"
+        : "Hidden",
   );
-  const content = el("div");
-  view.append(el("div", { class: "split" }, aside, content));
-  const chapter = chapters.find((c) => c.id === chapterId);
-  if (!chapter) {
-    content.append(empty("Add a chapter. New chapters start hidden."));
+}
+function teacherCourses(view) {
+  const course = state.courses.find((c) => c.id === courseId);
+  if (teacherView !== "chapter") {
+    view.append(
+      el(
+        "div",
+        { class: "toolbar" },
+        el("h1", {}, course.name),
+        moreActions("Course options", [
+          { label: "Rename course", run: () => courseForm(course) },
+          {
+            label: "Preview as a student",
+            run: async () => {
+              const preview = await api(
+                  "/preview?courseId=" + encodeURIComponent(course.id),
+                ),
+                body = el("div");
+              resourceList(body, preview);
+              modal(course.name + " · Student preview", body, true);
+            },
+          },
+          { label: "Copy to another year", run: () => duplicateCourse(course) },
+          {
+            label: "Archive course",
+            kind: "danger",
+            run: () =>
+              confirmAction(
+                "Archive course?",
+                "The course will be hidden. Its files, students and history are preserved.",
+                async () => {
+                  await command("courses.archive", {
+                    id: course.id,
+                    archived: true,
+                  });
+                  teacherView = "home";
+                  await refresh();
+                },
+              ),
+          },
+        ]),
+      ),
+    );
+    view.append(
+      el(
+        "div",
+        { class: "teacher-section-actions" },
+        button("Students & activities", () => teacherGo("tools", course.id)),
+      ),
+    );
+    const chapters = state.chapters.filter((c) => c.course_id === course.id);
+    view.append(
+      panel(
+        heading(
+          "Chapters",
+          button("+ Add chapter", () => chapterForm(), "primary"),
+        ),
+        chapters.length
+          ? el(
+              "div",
+              { class: "teacher-chapter-list" },
+              chapters.map((c) => {
+                const count = state.documents.filter(
+                  (d) => d.chapter_id === c.id,
+                ).length;
+                return el(
+                  "button",
+                  {
+                    class: "teacher-chapter-row",
+                    onclick: () => teacherGo("chapter", course.id, c.id),
+                  },
+                  el(
+                    "span",
+                    {},
+                    el("strong", {}, c.name),
+                    el(
+                      "span",
+                      { class: "meta" },
+                      countLabel(count, "document"),
+                    ),
+                  ),
+                  visibilityBadge(c),
+                  el("span", { "aria-hidden": "true" }, "→"),
+                );
+              }),
+            )
+          : empty("No chapters yet."),
+      ),
+    );
     return;
   }
-  content.append(
-    panel(
-      heading(
-        chapter.name,
-        button("Edit / publish", () => chapterForm(chapter)),
-        button("Move up", () => moveChapter(-1)),
-        button("Move down", () => moveChapter(1)),
-        button(
-          "Remove",
-          () =>
+  const chapter = state.chapters.find((c) => c.id === chapterId),
+    docs = state.documents.filter((d) => d.chapter_id === chapter.id);
+  view.append(
+    el(
+      "div",
+      { class: "toolbar" },
+      el("div", {}, el("h1", {}, chapter.name), visibilityBadge(chapter)),
+      button("+ Upload document", () => resourceUpload(chapter.id), "primary"),
+    ),
+  );
+  view.append(
+    el(
+      "div",
+      { class: "teacher-section-actions" },
+      chapter.status === "hidden"
+        ? button("Publish chapter", () =>
+            saveRefresh("chapters.save", {
+              id: chapter.id,
+              courseId: course.id,
+              name: chapter.name,
+              status: "published",
+            }),
+          )
+        : null,
+      moreActions("Chapter options", [
+        { label: "Edit title & visibility", run: () => chapterForm(chapter) },
+        { label: "Move chapter up", run: () => moveChapter(-1) },
+        { label: "Move chapter down", run: () => moveChapter(1) },
+        {
+          label: "Remove chapter",
+          kind: "danger",
+          run: () =>
             confirmAction(
               "Remove chapter?",
-              "The chapter and its documents will be removed from student access.",
-              () => saveRefresh("chapters.delete", { id: chapter.id }),
+              "The chapter and its documents will no longer be shown to students.",
+              async () => {
+                await command("chapters.delete", { id: chapter.id });
+                teacherView = "course";
+                chapterId = null;
+                await refresh();
+              },
             ),
-          "danger",
-        ),
-      ),
-      badge(chapter.status),
-      chapter.publish_at
-        ? help("Scheduled: " + date(chapter.publish_at))
-        : null,
+        },
+      ]),
     ),
   );
-  const docs = state.documents.filter((d) => d.chapter_id === chapter.id);
-  content.append(
-    panel(
-      heading(
-        "Documents",
-        button("+ Upload", () => resourceUpload(chapter.id)),
+  if (chapter.status === "hidden")
+    view.append(
+      el(
+        "p",
+        { class: "help" },
+        "Publish the chapter when it is ready for students.",
       ),
-      help("PDF / PPTX · Maximum 50 MB per file · New documents start hidden."),
+    );
+  view.append(
+    panel(
+      heading("Documents"),
       docs.length
         ? docs.map((d) =>
             el(
@@ -696,40 +906,69 @@ function teacherCourses(view) {
               { class: "resource" },
               el(
                 "div",
-                {},
-                el("strong", {}, d.title),
+                { class: "teacher-document-title" },
+                d.file
+                  ? button(
+                      d.title,
+                      () => openFile(d.file.id, d.file.name, d.file.mime),
+                      "text-button document-link",
+                    )
+                  : el("strong", {}, d.title),
                 el(
                   "div",
                   { class: "meta" },
-                  badge(d.status),
-                  " · ",
-                  d.file ? size(d.file.size) + " · " + date(d.created) : "",
+                  visibilityBadge(d),
+                  d.file
+                    ? " · " +
+                        d.file.name.split(".").pop().toUpperCase() +
+                        " · " +
+                        date(d.created)
+                    : "",
                 ),
               ),
               actions(
-                d.file
-                  ? button("View", () =>
-                      openFile(d.file.id, d.file.name, d.file.mime),
+                d.status === "hidden"
+                  ? button(
+                      "Publish",
+                      () =>
+                        saveRefresh("documents.save", {
+                          id: d.id,
+                          title: d.title,
+                          status: "published",
+                        }),
+                      "secondary small",
                     )
                   : null,
-                button("Edit / publish", () => documentForm(d)),
-                button(
-                  "Remove",
-                  () =>
-                    confirmAction(
-                      "Remove document?",
-                      "Students will no longer see this document.",
-                      () => saveRefresh("documents.delete", { id: d.id }),
-                    ),
-                  "danger",
-                ),
+                moreActions("Document options", [
+                  {
+                    label: "Edit title & visibility",
+                    run: () => documentForm(d),
+                  },
+                  d.file
+                    ? {
+                        label: "Download",
+                        run: () => downloadFile(d.file.id, d.file.name),
+                      }
+                    : null,
+                  {
+                    label: "Remove document",
+                    kind: "danger",
+                    run: () =>
+                      confirmAction(
+                        "Remove document?",
+                        "Students will no longer see this document.",
+                        () => saveRefresh("documents.delete", { id: d.id }),
+                      ),
+                  },
+                ]),
               ),
             ),
           )
-        : empty("No documents."),
+        : empty("No documents yet. Upload a PDF or PowerPoint file."),
     ),
   );
 }
+
 function courseForm(course) {
   formModal(
     course ? "Rename course" : "Add course",
@@ -743,12 +982,13 @@ function courseForm(course) {
       courseId = r.id;
       dialog.close();
       await refresh();
+      teacherGo("course", r.id);
     },
     "Save",
   );
 }
 function chapterForm(chapter) {
-  formModal(
+  const dialog = formModal(
     chapter ? "Edit chapter" : "Add chapter",
     [
       field("name", "Chapter title", "text", chapter?.name),
@@ -757,30 +997,33 @@ function chapterForm(chapter) {
             field("status", "Visibility", "select", chapter.status, pubOptions),
             field(
               "publishAt",
-              "Publish at (platform timezone)",
+              "Publish at",
               "datetime-local",
               localDate(chapter.publish_at),
             ),
           ]
         : []),
     ],
-    (data, form, dialog) =>
-      saveRefresh(
+    async (data, form, dialog) => {
+      const result = await saveRefresh(
         "chapters.save",
         { ...data, id: chapter?.id, courseId, publishAt: iso(data.publishAt) },
         dialog,
-      ),
+      );
+      if (!chapter) teacherGo("chapter", courseId, result.id);
+    },
   );
+  revealScheduledDate(dialog);
 }
 function documentForm(d) {
-  formModal(
+  const dialog = formModal(
     "Edit document",
     [
       field("title", "Document title", "text", d.title),
       field("status", "Visibility", "select", d.status, pubOptions),
       field(
         "publishAt",
-        "Publish at (platform timezone)",
+        "Publish at",
         "datetime-local",
         localDate(d.publish_at),
       ),
@@ -792,6 +1035,17 @@ function documentForm(d) {
         dialog,
       ),
   );
+  revealScheduledDate(dialog);
+}
+function revealScheduledDate(dialog) {
+  const select = dialog.querySelector("select[name=status]"),
+    date = dialog.querySelector("input[name=publishAt]");
+  if (!select || !date) return;
+  const update = () => {
+    date.closest("label").hidden = select.value !== "scheduled";
+  };
+  select.addEventListener("change", update);
+  update();
 }
 async function moveChapter(direction) {
   const chapters = state.chapters.filter((c) => c.course_id === courseId),
@@ -843,7 +1097,10 @@ function resourceUpload(parentId, category = "resource") {
       }
       dialog.close();
       await refresh();
-      msg("Upload saved. Publish new course documents when ready.", "success");
+      msg(
+        category === "resource" ? "Documents uploaded." : "File uploaded.",
+        "success",
+      );
     },
     "Upload",
     "Maximum 50 MB per file.",
@@ -1025,7 +1282,6 @@ async function openFile(id, name, mime) {
   msg();
 }
 function teacherStudents(view) {
-  courseNav(view);
   const enrollments = state.enrollments.filter((e) => e.course_id === courseId),
     ids = new Set(enrollments.map((e) => e.student_id)),
     students = state.students.filter((s) => ids.has(s.id));
@@ -1048,41 +1304,42 @@ function teacherStudents(view) {
     list.replaceChildren(
       matches.length
         ? table(
-            ["Name", "Email", "Access", "Actions"],
+            ["Student", "Email", "Status", ""],
             matches.map((s) => {
               const e = enrollments.find((e) => e.student_id === s.id);
               return [
-                s.first_name + " " + s.last_name,
+                button(
+                  s.first_name + " " + s.last_name,
+                  () => studentForm(s, e),
+                  "text-button",
+                ),
                 s.email,
                 badge(
                   s.active && e.status === "active" ? "active" : "inactive",
                 ),
-                actions(
-                  button(
-                    "Edit / transfer",
-                    () => studentForm(s, e),
-                    "secondary small",
-                  ),
-                  button(
-                    "New code",
-                    () =>
+                moreActions("Student options", [
+                  {
+                    label: "Edit student or change course",
+                    run: () => studentForm(s, e),
+                  },
+                  {
+                    label: "Create a new access code",
+                    run: () =>
                       confirmAction(
                         "Replace student code?",
-                        "The old code and sessions will stop working. Save the new code after it appears.",
+                        "The old code will stop working. Save the new code after it appears.",
                         () => saveRefresh("students.code", { id: e.id }),
                       ),
-                    "secondary small",
-                  ),
-                  button(
-                    s.active ? "Deactivate" : "Activate",
-                    () =>
+                  },
+                  {
+                    label: s.active ? "Deactivate student" : "Activate student",
+                    run: () =>
                       saveRefresh("students.deactivate", {
                         id: s.id,
                         active: !s.active,
                       }),
-                    "secondary small",
-                  ),
-                ),
+                  },
+                ]),
               ];
             }),
           )
@@ -1098,9 +1355,22 @@ function teacherStudents(view) {
     panel(
       heading(
         "Students",
-        button("+ Add student", () => studentForm()),
-        button("Import CSV / XLSX", () => importStudents()),
-        button("Export XLSX", () =>
+        button("+ Add student", () => studentForm(), "primary"),
+        button("Import list", () => importStudents()),
+      ),
+      search,
+      list,
+    ),
+  );
+  view.append(
+    el(
+      "details",
+      { class: "settings-section" },
+      el("summary", {}, "Download student list"),
+      el(
+        "div",
+        { class: "settings-section-body" },
+        button("Download Excel file", () =>
           spreadsheet(
             ["First name", "Last name", "Email", "Course", "Active"],
             filtered().map((s) => [
@@ -1116,12 +1386,11 @@ function teacherStudents(view) {
           ),
         ),
       ),
-      search,
-      list,
     ),
   );
   draw();
 }
+
 function studentForm(s, e) {
   if (!courseId) {
     msg("Add a course first.", "error");
@@ -1339,45 +1608,52 @@ function importStudents() {
   );
 }
 function teacherAnnouncements(view) {
+  const announcements = state.announcements.filter((a) =>
+    JSON.parse(a.course_ids).includes(courseId),
+  );
   view.append(
     panel(
       heading(
         "Announcements",
-        button("+ New announcement", () => announcementForm()),
+        button("+ New announcement", () => announcementForm(), "primary"),
       ),
-      help("Website announcements. Email delivery is off."),
-      state.announcements.length
-        ? state.announcements.map((a) =>
+      announcements.length
+        ? announcements.map((a) =>
             el(
               "div",
               { class: "resource" },
               el(
                 "div",
                 {},
-                el("strong", {}, a.title),
+                button(
+                  a.title,
+                  () => announcementForm(a),
+                  "text-button document-link",
+                ),
                 badge(a.status),
-                help(
-                  JSON.parse(a.course_ids).map(courseName).join(", ") +
-                    " · " +
-                    a.readCount +
-                    " read",
-                ),
+                help(a.readCount + " read"),
               ),
-              actions(
-                button("Edit / publish", () => announcementForm(a)),
-                button("Attach file", () =>
-                  resourceUpload(a.id, "announcement"),
-                ),
-                button("Archive", () =>
-                  saveRefresh("announcements.delete", { id: a.id }),
-                ),
-              ),
+              moreActions("Announcement options", [
+                {
+                  label: "Edit message & visibility",
+                  run: () => announcementForm(a),
+                },
+                {
+                  label: "Attach a file",
+                  run: () => resourceUpload(a.id, "announcement"),
+                },
+                {
+                  label: "Archive announcement",
+                  run: () => saveRefresh("announcements.delete", { id: a.id }),
+                },
+              ]),
             ),
           )
         : empty("No announcements."),
     ),
   );
 }
+
 function announcementForm(a) {
   const opts = [
     { value: "draft", label: "Draft" },
@@ -1400,7 +1676,7 @@ function announcementForm(a) {
       field("status", "Visibility", "select", a?.status || "draft", opts),
       field(
         "publishAt",
-        "Publish at (platform timezone)",
+        "Publish at",
         "datetime-local",
         localDate(a?.publish_at),
       ),
@@ -1440,7 +1716,6 @@ function studentAnnouncements(view) {
     );
 }
 function teacherAttendance(view) {
-  courseNav(view);
   const sessions = state.attendanceSessions.filter(
     (s) => s.course_id === courseId,
   );
@@ -1651,13 +1926,12 @@ function studentAttendance(view) {
   );
 }
 function teacherAssignments(view) {
-  courseNav(view);
   const assignments = state.assignments.filter((a) => a.course_id === courseId);
   view.append(
     panel(
       heading(
         "Assignments",
-        button("+ New assignment", () => assignmentForm()),
+        button("+ New assignment", () => assignmentForm(), "primary"),
       ),
       assignments.length
         ? assignments.map((a) =>
@@ -1669,24 +1943,17 @@ function teacherAssignments(view) {
                 {},
                 el("strong", {}, a.title),
                 badge(a.status),
-                help(
-                  "Deadline: " +
-                    date(a.deadline) +
-                    " · " +
-                    state.submissions.filter(
-                      (s) =>
-                        s.assignment_id === a.id &&
-                        state.submissionFiles.some(
-                          (f) => f.submission_id === s.id,
-                        ),
-                    ).length +
-                    " submissions",
-                ),
+                a.deadline ? help("Deadline: " + date(a.deadline)) : null,
               ),
               actions(
-                button("Edit", () => assignmentForm(a)),
-                button("Submissions", () => submissionsView(a)),
-                button("Extension", () => extensionForm(a, "assignment")),
+                button("Review work", () => submissionsView(a)),
+                moreActions("Assignment options", [
+                  { label: "Edit assignment", run: () => assignmentForm(a) },
+                  {
+                    label: "Give a student an extension",
+                    run: () => extensionForm(a, "assignment"),
+                  },
+                ]),
               ),
             ),
           )
@@ -1694,22 +1961,18 @@ function teacherAssignments(view) {
     ),
   );
 }
+
 function assignmentForm(a) {
   if (!courseId) {
     msg("Add a course first.", "error");
     return;
   }
-  formModal(
+  const dialog = formModal(
     a ? "Edit assignment" : "New assignment",
     [
       field("title", "Title", "text", a?.title),
       field("body", "Instructions", "textarea", a?.body),
-      field(
-        "deadline",
-        "Deadline (platform timezone)",
-        "datetime-local",
-        localDate(a?.deadline),
-      ),
+      field("deadline", "Deadline ", "datetime-local", localDate(a?.deadline)),
       field("status", "Visibility", "select", a?.status || "draft", [
         { value: "draft", label: "Draft" },
         { value: "published", label: "Published" },
@@ -1754,6 +2017,24 @@ function assignmentForm(a) {
         dialog,
       ),
   );
+  const options = el(
+    "details",
+    { class: "settings-section" },
+    el("summary", {}, "Submission options"),
+    el("div", { class: "settings-section-body" }),
+  );
+  const body = options.lastElementChild;
+  for (const name of ["maxFileMB", "allowLate", "allowReplace", "groups"]) {
+    const input = dialog.querySelector("[name=" + name + "]");
+    if (input) {
+      const container =
+        name === "maxFileMB"
+          ? input.closest(".form-grid")
+          : input.closest("label");
+      if (container) body.append(container);
+    }
+  }
+  dialog.querySelector("button[type=submit]").before(options);
 }
 function submissionsView(a) {
   const list = state.submissions.filter((s) => s.assignment_id === a.id),
@@ -1887,7 +2168,7 @@ function extensionForm(parent, kind) {
     "Student deadline extension",
     [
       field("enrollmentId", "Student", "select", "", options),
-      field("closesAt", "New deadline (platform timezone)", "datetime-local"),
+      field("closesAt", "New deadline ", "datetime-local"),
     ],
     (data, form, dialog) =>
       saveRefresh(
@@ -2020,15 +2301,32 @@ function submissionUpload(a) {
   );
 }
 function teacherProjects(view) {
-  courseNav(view);
   const sheets = state.sheets.filter((s) => s.course_id === courseId);
+  const addSheet = () => {
+    const body = el("div", { class: "choice-list" }),
+      dialog = modal("Add project table", body);
+    body.append(
+      button("Create a new table", () => {
+        dialog.close();
+        templateEditor();
+      }),
+      button("Import a spreadsheet", () => {
+        dialog.close();
+        templateImport();
+      }),
+      state.templates.length
+        ? button("Use a saved template", () => {
+            dialog.close();
+            assignTemplate();
+          })
+        : el("span"),
+    );
+  };
   view.append(
     panel(
       heading(
-        "Project sheets",
-        button("+ Create template", () => templateEditor()),
-        button("Import XLSX / CSV", () => templateImport()),
-        button("Assign template", () => assignTemplate()),
+        "Project tables",
+        button("+ Add project table", addSheet, "primary"),
       ),
       sheets.length
         ? sheets.map((s) =>
@@ -2039,42 +2337,58 @@ function teacherProjects(view) {
                 "div",
                 {},
                 el("strong", {}, s.title),
-                badge(s.status),
-                help("Closes: " + date(s.closes_at)),
+                visibilityBadge(s),
+                s.closes_at ? help("Closes: " + date(s.closes_at)) : null,
               ),
               actions(
                 button("Open table", () => openSheet(s.id)),
-                button("Publish / dates", () => sheetForm(s)),
-                button("Extension", () => extensionForm(s, "sheet")),
+                moreActions("Table options", [
+                  { label: "Visibility & deadlines", run: () => sheetForm(s) },
+                  {
+                    label: "Give a student an extension",
+                    run: () => extensionForm(s, "sheet"),
+                  },
+                ]),
               ),
             ),
           )
-        : empty("Assign a template to create a project sheet."),
+        : empty("No project tables yet."),
     ),
   );
-  view.append(
-    panel(
-      heading("Templates"),
-      state.templates.length
-        ? table(
-            ["Template", "Version", ""],
-            state.templates.map((t) => [
+  if (state.templates.length)
+    view.append(
+      el(
+        "details",
+        { class: "settings-section" },
+        el("summary", {}, "Saved templates"),
+        el(
+          "div",
+          { class: "settings-section-body" },
+          state.templates.map((t) =>
+            el(
+              "div",
+              { class: "resource" },
               t.title,
-              t.version,
-              actions(
-                button("Edit columns", () => templateEditor(t)),
+              moreActions("Template options", [
+                {
+                  label: "Edit template columns",
+                  run: () => templateEditor(t),
+                },
                 t.original_file_id
-                  ? button("Original file", () =>
-                      downloadFile(t.original_file_id, t.title + ".xlsx"),
-                    )
+                  ? {
+                      label: "Download original file",
+                      run: () =>
+                        downloadFile(t.original_file_id, t.title + ".xlsx"),
+                    }
                   : null,
-              ),
-            ]),
-          )
-        : empty("No templates."),
-    ),
-  );
+              ]),
+            ),
+          ),
+        ),
+      ),
+    );
 }
+
 function templateEditor(template, initialColumns, originalFile) {
   const rows = [],
     list = el("div");
@@ -2184,9 +2498,15 @@ function templateEditor(template, initialColumns, originalFile) {
           d.querySelector(".dialog-status").textContent = t + " " + v + "%";
         });
       }
+      if (!template && courseId)
+        await command("sheets.assign", {
+          templateId: result.id,
+          yearId,
+          courseIds: [courseId],
+        });
       d.close();
       await refresh();
-      msg("Template saved. Existing sheets keep their own columns.", "success");
+      msg(template ? "Template saved." : "Project table created.", "success");
     });
   });
 }
@@ -2250,13 +2570,13 @@ function sheetForm(s) {
       ]),
       field(
         "opensAt",
-        "Editing opens (platform timezone)",
+        "Editing opens",
         "datetime-local",
         localDate(s.opens_at),
       ),
       field(
         "closesAt",
-        "Editing closes (platform timezone)",
+        "Editing closes",
         "datetime-local",
         localDate(s.closes_at),
       ),
@@ -2457,75 +2777,49 @@ function studentProjects(view) {
   );
 }
 async function teacherSettings(view) {
-  const storage = panel(
-    heading("File storage"),
-    help("Loading Google Drive status…"),
+  const section = (title, ...content) =>
+    el(
+      "details",
+      { class: "settings-section" },
+      el("summary", {}, title),
+      el("div", { class: "settings-section-body" }, ...content),
+    );
+  const browseYear = field(
+    "year",
+    "View courses for academic year",
+    "select",
+    yearId,
+    yearOptions(),
   );
-  view.append(storage);
-  const policy = panel(
-    heading("Attendance policy"),
-    button("Edit policy", () =>
-      formModal(
-        "Attendance policy",
-        [
-          field("timezone", "Timezone", "text", state.settings.timezone),
-          field(
-            "lateWeight",
-            "Late arrival counts as",
-            "select",
-            String(state.settings.lateWeight),
-            [
-              { value: "1", label: "Present (100%)" },
-              { value: "0.5", label: "Half (50%)" },
-              { value: "0", label: "Absent (0%)" },
-            ],
-          ),
-          field(
-            "excused",
-            "Excused absence",
-            "select",
-            state.settings.excused,
-            [
-              { value: "exclude", label: "Exclude from calculation" },
-              { value: "present", label: "Count as present" },
-              { value: "absent", label: "Count as absent" },
-            ],
-          ),
-        ],
-        (data, form, d) => saveRefresh("settings.save", data, d),
-      ),
-    ),
-    help(
-      "Late: " +
-        state.settings.lateWeight * 100 +
-        "% · Excused: " +
-        state.settings.excused +
-        " · " +
-        state.settings.timezone,
-    ),
+  browseYear.querySelector("select").addEventListener("change", (e) =>
+    run(async () => {
+      yearId = e.target.value;
+      courseId = null;
+      chapterId = null;
+      teacherView = "home";
+      await refresh();
+      history.pushState({}, "", "#courses");
+    }),
   );
   view.append(
-    policy,
-    panel(
-      heading(
-        "Academic years",
-        button("+ Add year", () =>
-          formModal(
-            "Academic year",
-            [
-              field("label", "Year label", "text"),
-              field("starts", "Start date", "date"),
-            ],
-            (data, form, d) => saveRefresh("years.save", data, d),
-          ),
+    section(
+      "Academic years",
+      browseYear,
+      button("+ Add year", () =>
+        formModal(
+          "Academic year",
+          [
+            field("label", "Year label", "text"),
+            field("starts", "Start date", "date"),
+          ],
+          (data, form, d) => saveRefresh("years.save", data, d),
         ),
       ),
       table(
-        ["Year", "Starts", "Status", ""],
+        ["Year", "Status", ""],
         state.years.map((y) => [
           y.label,
-          date(y.starts),
-          badge(y.active ? "active" : "archived"),
+          badge(y.active ? "active" : "inactive"),
           !y.active
             ? button("Make active", () =>
                 confirmAction(
@@ -2538,26 +2832,59 @@ async function teacherSettings(view) {
         ]),
       ),
     ),
-    panel(
-      heading(
-        "Private export",
-        button("Export database JSON", async () =>
-          jsonDownload(
-            await api("/export"),
-            "tasnim-classroom-private-export.json",
-          ),
+  );
+  view.append(
+    section(
+      "Attendance rules",
+      button("Edit rules", () =>
+        formModal(
+          "Attendance rules",
+          [
+            field("timezone", "Time zone", "text", state.settings.timezone),
+            field(
+              "lateWeight",
+              "Late arrival counts as",
+              "select",
+              String(state.settings.lateWeight),
+              [
+                { value: "1", label: "Present (100%)" },
+                { value: "0.5", label: "Half (50%)" },
+                { value: "0", label: "Absent (0%)" },
+              ],
+            ),
+            field(
+              "excused",
+              "Excused absence",
+              "select",
+              state.settings.excused,
+              [
+                { value: "exclude", label: "Exclude from calculation" },
+                { value: "present", label: "Count as present" },
+                { value: "absent", label: "Count as absent" },
+              ],
+            ),
+          ],
+          (data, form, d) => saveRefresh("settings.save", data, d),
         ),
       ),
-      help(
-        "Contains private student records and access-code hashes. Keep this download private. Files are downloaded separately.",
+    ),
+  );
+  const storage = el("div", {}, help("Loading storage status…"));
+  view.append(section("File storage", storage));
+  view.append(
+    section(
+      "Export classroom data",
+      help("This download contains private student records. Keep it private."),
+      button("Download classroom data", async () =>
+        jsonDownload(
+          await api("/export"),
+          "tasnim-classroom-private-export.json",
+        ),
       ),
     ),
-    panel(
-      heading("Website announcements"),
-      help(
-        "Email delivery is off. Annual code renewal and automatic file deletion are deferred.",
-      ),
-    ),
+  );
+  view.append(
+    section("Other actions", button("Refresh classroom data", refresh)),
   );
   try {
     const connection = await api("/storage");
@@ -2583,49 +2910,40 @@ async function teacherSettings(view) {
         "Save securely",
         "Owner setup only. Credentials are encrypted on the server.",
       );
-    const ownerDetails = el(
-      "details",
-      { class: "details" },
-      el("summary", {}, "Owner connection settings"),
-      button("Owner app setup", ownerSetup),
-      help(
-        "OAuth callback: https://tasnim-classroom-service.chamseddine.chatgpt.site/api/lms/storage/google-drive/callback",
+    const owner = section(
+      "Owner connection settings",
+      button(
+        connection.connected
+          ? "Reconnect Google Drive"
+          : "Connect Google Drive",
+        async () => {
+          const result = await api("/storage/google-drive/start", "POST", {});
+          location.assign(result.url);
+        },
       ),
+      button("Test connection", async () => {
+        const check = await api("/storage/test", "POST", {});
+        if (!check.verified) throw new Error("Storage verification failed.");
+        msg("Storage connection verified.", "success");
+      }),
+      button("Owner app setup", ownerSetup),
     );
     storage.replaceChildren(
-      heading("File storage"),
       badge(connection.connected ? "Connected" : "Not connected"),
-      help("Google Drive · Private classroom files"),
       connection.quota
         ? help(
-            "Drive usage: " +
+            "Storage used: " +
               size(Number(connection.quota.usage || 0)) +
               (connection.quota.limit
                 ? " / " + size(Number(connection.quota.limit))
                 : ""),
           )
         : el("span"),
-      actions(
-        button(
-          connection.connected
-            ? "Reconnect Google Drive"
-            : "Connect Google Drive",
-          async () => {
-            const result = await api("/storage/google-drive/start", "POST", {});
-            location.assign(result.url);
-          },
-          "primary",
-        ),
-        button("Test connection", async () => {
-          const check = await api("/storage/test", "POST", {});
-          if (!check.verified) throw new Error("Storage verification failed.");
-          msg("Storage upload and download verified.", "success");
-        }),
-      ),
-      ownerDetails,
+      owner,
     );
   } catch (e) {
-    storage.replaceChildren(heading("File storage"), help(e.message));
+    storage.replaceChildren(help(e.message));
   }
 }
+
 login();

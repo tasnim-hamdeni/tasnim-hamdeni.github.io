@@ -17,7 +17,7 @@ The existing 3 courses, 10 chapters and 19 documents were imported idempotently 
 
 ## Automated verification
 
-31 frontend/catalog/DOM/PDF tests pass. Coverage includes the retained public library, file validation, catalog concurrency, publication failures, literal HTML titles, the new teacher/student portal, course creation, project cards, announcements, asynchronous buttons, logout races and PDF rendering.
+32 frontend/catalog/DOM/PDF tests pass. Coverage includes the retained public library, file validation, catalog concurrency, publication failures, literal HTML titles, the new teacher/student portal, course creation, project cards, announcements, asynchronous buttons, logout races and PDF rendering.
 
 16 backend/authentication/SQL integration tests pass. They exercise actual SQLite migrations through a D1-compatible test adapter. Coverage includes teacher ownership, cross-course/student download denial, code hashing and revocation, year activation, hidden/scheduled resources, attendance revisions and private reports, project row ownership, teacher-only fields, deadlines, stale-save rejection, history/restore, group membership, confirmed/failed file uploads and credential-free exports.
 
@@ -44,3 +44,9 @@ The source includes a reviewed migration plan, API contract, portable data model
 ## Next use
 
 No further owner technical setup is required. Tasnim adds/imports students, privately distributes their codes, uploads documents and publishes the intended chapters/resources.
+
+## Guided teacher interface update
+
+The teacher home now shows course cards and Add course. Selecting a course shows only its chapters; selecting a chapter opens its documents and upload control. Secondary actions open separate options dialogs. Students, announcements, attendance, assignments and project tables are reached through Students & activities inside a course. Settings sections are collapsed. The global time-zone line and the disabled-feature notice were removed from the everyday interface. Scheduled date fields and assignment options appear only when needed.
+
+The new navigation was tested through chapter creation and automatic opening of the upload screen in the disposable local classroom. No production course data or backend authentication changed.

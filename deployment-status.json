@@ -21,7 +21,7 @@
     "privateRecords": "D1"
   },
   "verification": {
-    "frontendTests": 31,
+    "frontendTests": 32,
     "backendTests": 16,
     "runtimeFilesMatchSource": 21,
     "preservedCourses": 3,
@@ -44,6 +44,7 @@
   ],
   "remainingOwnerTechnicalAction": null,
   "nextTeachingStep": "Add/import students, save their newly generated codes privately, and publish course resources.",
-  "applicationBaselineCommit": "8d631547996bf4dacb46b7877e693a620e0dd7dc",
-  "lastDisplayAdjustment": "Readable GB/TB storage quota units."
+  "applicationBaselineCommit": "3a3d7b8c8ce79cb2f8a150b2e4a58fc8d487a58b",
+  "lastDisplayAdjustment": "Readable GB/TB storage quota units.",
+  "teacherInterface": "My courses > course > chapter > documents; secondary actions in options; class tools and settings separate"
 }
