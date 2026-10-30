@@ -1,114 +1,2630 @@
-import {api,signIn,signOut,clearSession,command,upload} from './classroom-api.js';
-import {getDocument,GlobalWorkerOptions} from './vendor/pdfjs/build/pdf.min.mjs';
-GlobalWorkerOptions.workerSrc=new URL('./vendor/pdfjs/build/pdf.worker.min.mjs',import.meta.url).href;
-const teacher=document.body.dataset.role==='teacher',app=document.getElementById('app'),status=document.getElementById('status'),sessionActions=document.getElementById('session-actions');
-let authEpoch=0;
-let state,tab=teacher?'courses':'resources',courseId,chapterId,yearId,issuedCodes=[],importRows=[];
-const el=(tag,attrs={},...children)=>{const n=document.createElement(tag);for(const [k,v] of Object.entries(attrs)){if(k.startsWith('on'))n.addEventListener(k.slice(2),v);else if(k==='class')n.className=v;else if(v!==undefined&&v!==null){if(k in n)n[k]=v;else n.setAttribute(k,v);}}for(const child of children.flat(Infinity))if(child!==undefined&&child!==null)n.append(child instanceof Node?child:document.createTextNode(String(child)));return n;};
-const msg=(text='',kind='')=>{status.textContent=text;status.className='status '+kind;};
-async function run(fn){try{await fn();}catch(e){msg(e.message,'error');const s=document.querySelector('dialog[open] .dialog-status');if(s)s.textContent=e.message;if(e.status===401){clearSession();state=null;login();}}}
-const button=(label,fn,kind='secondary')=>el('button',{type:'button',class:'button '+kind,onclick:e=>{const target=e.currentTarget;return run(async()=>{target.disabled=true;try{await fn();}finally{target.disabled=false;}});}},label);
-const actions=(...items)=>el('div',{class:'actions'},...items);
-const badge=value=>el('span',{class:'badge '+value},value);
-const empty=text=>el('div',{class:'empty'},text);
-const panel=(...items)=>el('section',{class:'panel'},...items);
-const heading=(title,...items)=>el('div',{class:'heading'},el('h2',{},title),actions(items));
-const help=text=>el('p',{class:'help'},text);
-const size=value=>value<1048576?Math.ceil(value/1024)+' KB':(value/1048576).toFixed(1)+' MB';
-const timezone=()=>state?.settings?.timezone||state?.timezone||'Africa/Lagos';
-const date=value=>value?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeZone:timezone(),...(value.includes('T')?{timeStyle:'short'}:{})}).format(new Date(value)):'—';
-function wallParts(value){return Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone:timezone(),year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(value)).filter(p=>p.type!=='literal').map(p=>[p.type,p.value]));}
-const localDate=value=>{if(!value)return '';const p=wallParts(value);return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;};
-function iso(value){if(!value)return null;const [y,m,d,h,min]=value.split(/[-T:]/).map(Number),target=Date.UTC(y,m-1,d,h,min);let guess=target;for(let i=0;i<3;i++){const p=wallParts(guess),actual=Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute);guess+=target-actual;}if(localDate(guess)!==value)throw new Error('This time does not exist in the platform timezone. Choose another time.');return new Date(guess).toISOString();}
-const courseName=id=>state.courses?.find(c=>c.id===id)?.name||'';
-const studentName=id=>{const s=state.students?.find(s=>s.id===id);return s?s.first_name+' '+s.last_name:'';};
-const enrollmentName=id=>studentName(state.enrollments?.find(e=>e.id===id)?.student_id);
-function table(headers,rows){return el('div',{class:'table-wrap'},el('table',{},el('thead',{},el('tr',{},headers.map(h=>el('th',{scope:'col'},h)))),el('tbody',{},rows.map(cells=>el('tr',{},cells.map(c=>el('td',{},c)))))));}
-function download(blob,name){const url=URL.createObjectURL(blob),a=el('a',{href:url,download:name});a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);}
-const jsonDownload=(value,name)=>download(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}),name);
-async function library(name){if(window[name])return window[name];const script=el('script',{src:new URL(name==='ExcelJS'?'./vendor/exceljs/exceljs.min.js':'./vendor/jszip/jszip.min.js',import.meta.url).href});await new Promise((resolve,reject)=>{script.onload=resolve;script.onerror=()=>reject(new Error('The spreadsheet library could not load.'));document.head.append(script);});return window[name];}
-async function spreadsheet(headers,rows,name){const ExcelJS=await library('ExcelJS'),book=new ExcelJS.Workbook(),sheet=book.addWorksheet('Data');sheet.addRow(headers);for(const row of rows)sheet.addRow(row.map(v=>v===null||v===undefined?'':typeof v==='number'?v:String(v)));sheet.getRow(1).font={bold:true};sheet.columns.forEach(c=>{c.width=26;});download(new Blob([await book.xlsx.writeBuffer()],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),name+'.xlsx');}
-function field(name,label,type='text',value='',options=[]){const id='field-'+name+'-'+Math.random().toString(36).slice(2,8);let input;if(type==='select'||type==='multi')input=el('select',{name,id,multiple:type==='multi'},options.map(o=>el('option',{value:o.value,selected:type==='multi'?(value||[]).includes(o.value):String(value)===String(o.value)},o.label)));else if(type==='textarea')input=el('textarea',{name,id,value});else input=el('input',{name,id,type:type==='check'?'checkbox':type,...(type==='check'?{checked:!!value}:{value:type==='file'?'':value||''})});return el('label',{class:'field'+(type==='check'?' check':''),htmlFor:id},el('span',{},label),input);}
-const courseOptions=()=>state.courses.filter(c=>!c.archived).map(c=>({value:c.id,label:c.name}));
-const yearOptions=()=>state.years.map(y=>({value:y.id,label:y.label}));
-const pubOptions=[{value:'hidden',label:'Hidden'},{value:'published',label:'Published'},{value:'scheduled',label:'Scheduled'}];
-function modal(title,content,wide=false){const dialog=el('dialog',{class:wide?'wide':''}),close=button('Close',()=>dialog.close(),'secondary small');close.classList.add('close');dialog.append(close,el('h2',{},title),el('p',{class:'dialog-status status',role:'status'}),content);dialog.addEventListener('close',()=>dialog.remove());document.body.append(dialog);dialog.showModal();return dialog;}
-function formModal(title,fields,save,submit='Save',note){const form=el('form',{},note?help(note):null,fields,el('button',{class:'button',type:'submit'},submit));const dialog=modal(title,form);form.addEventListener('submit',e=>{e.preventDefault();run(async()=>{const b=form.querySelector('button[type=submit]');b.disabled=true;try{const data={};for(const input of form.elements){if(!input.name)continue;data[input.name]=input.type==='checkbox'?input.checked:input.type==='select-multiple'?[...input.selectedOptions].map(o=>o.value):input.type==='file'?input.files:input.value;}await save(data,form,dialog);}finally{b.disabled=false;}});});return dialog;}
-async function saveRefresh(action,data,dialog){const result=await command(action,data);dialog?.close();if(result.issuedCodes?.length)issuedCodes=result.issuedCodes;await refresh();msg('Saved.','success');if(result.issuedCodes?.length)showCodes();return result;}
-function confirmAction(title,text,fn){let dialog;dialog=modal(title,el('div',{},el('p',{},text),actions(button('Cancel',()=>dialog.close()),button('Confirm',async()=>{await fn();dialog.close();},'danger'))));}
-function login(){authEpoch++;state=null;sessionActions.replaceChildren();app.replaceChildren();msg();const form=el('form',{autocomplete:'off'},field('code',teacher?'Teacher access code':'Student access code','password'),el('button',{class:'button',type:'submit'},'Sign in'));const input=form.querySelector('input');input.required=true;input.autocomplete='off';input.maxLength=100;app.append(el('section',{class:'login'},el('h1',{},teacher?'Teacher dashboard':'Student access'),form));form.addEventListener('submit',e=>{e.preventDefault();run(async()=>{const submit=form.querySelector('button');submit.disabled=true;try{await signIn(teacher?'teacher':'student',input.value);input.value='';await refresh();}finally{submit.disabled=false;}});});}
-async function refresh(){const epoch=authEpoch;msg('Loading…');const next=await api(teacher?'/state'+(yearId?'?yearId='+encodeURIComponent(yearId):''):'/student');if(epoch!==authEpoch)return;state=next;if(teacher){yearId=state.year.id;if(!state.courses.some(c=>c.id===courseId&&!c.archived))courseId=state.courses.find(c=>!c.archived)?.id;}render();msg();}
-function render(){sessionActions.replaceChildren(button('Refresh',refresh,'secondary small'),button('Sign out',async()=>{authEpoch++;try{await signOut();}finally{issuedCodes=[];importRows=[];document.querySelectorAll('dialog').forEach(d=>d.close());login();}},'secondary small'));
- app.replaceChildren();const title=teacher?'Classroom':state.course.name;const year=teacher?field('year','Academic year','select',yearId,yearOptions()):badge(state.year.label);if(teacher)year.querySelector('select').addEventListener('change',e=>run(async()=>{yearId=e.target.value;courseId=null;await refresh();}));
- app.append(el('div',{class:'toolbar'},el('div',{},el('h1',{},title),teacher?help('Times: '+timezone()):help(state.student.firstName+' '+state.student.lastName)),year));
- const tabs=teacher?[['courses','Courses'],['students','Students'],['announcements','Announcements'],['attendance','Attendance'],['assignments','Assignments'],['projects','Projects'],['settings','Settings']]:[['resources','Resources'],['announcements','Announcements'],['assignments','Assignments'],['projects','Projects'],['attendance','Attendance']];
- app.append(el('nav',{class:'tabs','aria-label':teacher?'Teacher tools':'Classroom'},tabs.map(([id,label])=>el('button',{'aria-current':tab===id?'page':undefined,onclick:()=>{tab=id;render();}},label+(id==='announcements'&&!teacher&&state.announcements.some(a=>!a.read)?' •':'')))));
- const view=el('div',{id:'view'});app.append(view);
- if(teacher)({courses:teacherCourses,students:teacherStudents,announcements:teacherAnnouncements,attendance:teacherAttendance,assignments:teacherAssignments,projects:teacherProjects,settings:teacherSettings}[tab])(view);else({resources:studentResources,announcements:studentAnnouncements,assignments:studentAssignments,projects:studentProjects,attendance:studentAttendance}[tab])(view);
+import {
+  api,
+  signIn,
+  signOut,
+  clearSession,
+  command,
+  upload,
+} from "./classroom-api.js";
+import {
+  getDocument,
+  GlobalWorkerOptions,
+} from "./vendor/pdfjs/build/pdf.min.mjs";
+GlobalWorkerOptions.workerSrc = new URL(
+  "./vendor/pdfjs/build/pdf.worker.min.mjs",
+  import.meta.url,
+).href;
+const teacher = document.body.dataset.role === "teacher",
+  app = document.getElementById("app"),
+  status = document.getElementById("status"),
+  sessionActions = document.getElementById("session-actions");
+let authEpoch = 0;
+let state,
+  tab = teacher ? "courses" : "resources",
+  courseId,
+  chapterId,
+  yearId,
+  issuedCodes = [],
+  importRows = [];
+const el = (tag, attrs = {}, ...children) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (k === "class") n.className = v;
+    else if (v !== undefined && v !== null) {
+      if (k in n) n[k] = v;
+      else n.setAttribute(k, v);
+    }
+  }
+  for (const child of children.flat(Infinity))
+    if (child !== undefined && child !== null)
+      n.append(
+        child instanceof Node ? child : document.createTextNode(String(child)),
+      );
+  return n;
+};
+const msg = (text = "", kind = "") => {
+  status.textContent = text;
+  status.className = "status " + kind;
+};
+async function run(fn) {
+  try {
+    await fn();
+  } catch (e) {
+    msg(e.message, "error");
+    const s = document.querySelector("dialog[open] .dialog-status");
+    if (s) s.textContent = e.message;
+    if (e.status === 401) {
+      clearSession();
+      state = null;
+      login();
+    }
+  }
 }
-function courseNav(view){view.append(el('nav',{class:'course-nav','aria-label':'Courses'},state.courses.filter(c=>!c.archived).map(c=>el('button',{'aria-current':courseId===c.id?'page':undefined,onclick:()=>{courseId=c.id;chapterId=null;render();}},c.name))));}
-function teacherCourses(view){courseNav(view);const selected=state.courses.find(c=>c.id===courseId);view.append(actions(button('+ Add course',()=>courseForm()),selected?button('Rename course',()=>courseForm(selected)):null,selected?button('Copy to another year',()=>duplicateCourse(selected)):null,selected?button('Student preview',()=>run(async()=>{const preview=await api('/preview?courseId='+encodeURIComponent(selected.id));const body=el('div');resourceList(body,preview);modal(selected.name+' · Student preview',body,true);})):null,selected?button('Remove course',()=>confirmAction('Remove course?', 'The course will be archived. Its files, students, and history are preserved.',()=>saveRefresh('courses.archive',{id:selected.id,archived:true})),'danger'):null));
- if(!selected){view.append(empty('Add a course to begin.'));return;}const chapters=state.chapters.filter(c=>c.course_id===courseId);if(!chapters.some(c=>c.id===chapterId))chapterId=chapters[0]?.id;
- const list=el('div',{class:'list'},chapters.map(c=>el('button',{class:'chapter-button','aria-current':c.id===chapterId?'page':undefined,onclick:()=>{chapterId=c.id;render();}},c.name,' ',badge(c.status))));
- const aside=el('aside',{},heading('Chapters',button('+ Add',()=>chapterForm())),list);const content=el('div');view.append(el('div',{class:'split'},aside,content));const chapter=chapters.find(c=>c.id===chapterId);if(!chapter){content.append(empty('Add a chapter. New chapters start hidden.'));return;}
- content.append(panel(heading(chapter.name,button('Edit / publish',()=>chapterForm(chapter)),button('Move up',()=>moveChapter(-1)),button('Move down',()=>moveChapter(1)),button('Remove',()=>confirmAction('Remove chapter?','The chapter and its documents will be removed from student access.',()=>saveRefresh('chapters.delete',{id:chapter.id})),'danger')),badge(chapter.status),chapter.publish_at?help('Scheduled: '+date(chapter.publish_at)):null));
- const docs=state.documents.filter(d=>d.chapter_id===chapter.id);content.append(panel(heading('Documents',button('+ Upload',()=>resourceUpload(chapter.id))),help('PDF / PPTX · Maximum 50 MB per file · New documents start hidden.'),docs.length?docs.map(d=>el('div',{class:'resource'},el('div',{},el('strong',{},d.title),el('div',{class:'meta'},badge(d.status),' · ',d.file?size(d.file.size)+' · '+date(d.created):'')),actions(d.file?button('View',()=>openFile(d.file.id,d.file.name,d.file.mime)):null,button('Edit / publish',()=>documentForm(d)),button('Remove',()=>confirmAction('Remove document?','Students will no longer see this document.',()=>saveRefresh('documents.delete',{id:d.id})),'danger')))):empty('No documents.')));
+const button = (label, fn, kind = "secondary") =>
+  el(
+    "button",
+    {
+      type: "button",
+      class: "button " + kind,
+      onclick: (e) => {
+        const target = e.currentTarget;
+        return run(async () => {
+          target.disabled = true;
+          try {
+            await fn();
+          } finally {
+            target.disabled = false;
+          }
+        });
+      },
+    },
+    label,
+  );
+const actions = (...items) => el("div", { class: "actions" }, ...items);
+const badge = (value) => el("span", { class: "badge " + value }, value);
+const empty = (text) => el("div", { class: "empty" }, text);
+const panel = (...items) => el("section", { class: "panel" }, ...items);
+const heading = (title, ...items) =>
+  el("div", { class: "heading" }, el("h2", {}, title), actions(items));
+const help = (text) => el("p", { class: "help" }, text);
+const size = (value) =>
+  value < 1048576
+    ? Math.ceil(value / 1024) + " KB"
+    : (value / 1048576).toFixed(1) + " MB";
+const timezone = () =>
+  state?.settings?.timezone || state?.timezone || "Africa/Lagos";
+const date = (value) =>
+  value
+    ? new Intl.DateTimeFormat("en-GB", {
+        dateStyle: "medium",
+        timeZone: timezone(),
+        ...(value.includes("T") ? { timeStyle: "short" } : {}),
+      }).format(new Date(value))
+    : "—";
+function wallParts(value) {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone(),
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(new Date(value))
+      .filter((p) => p.type !== "literal")
+      .map((p) => [p.type, p.value]),
+  );
 }
-function courseForm(course){formModal(course?'Rename course':'Add course',[field('name','Course name','text',course?.name)],async(data,form,dialog)=>{const r=await command('courses.save',{...data,id:course?.id,yearId});courseId=r.id;dialog.close();await refresh();},'Save');}
-function chapterForm(chapter){formModal(chapter?'Edit chapter':'Add chapter',[field('name','Chapter title','text',chapter?.name),...(chapter?[field('status','Visibility','select',chapter.status,pubOptions),field('publishAt','Publish at (platform timezone)','datetime-local',localDate(chapter.publish_at))]:[])],(data,form,dialog)=>saveRefresh('chapters.save',{...data,id:chapter?.id,courseId,publishAt:iso(data.publishAt)},dialog));}
-function documentForm(d){formModal('Edit document',[field('title','Document title','text',d.title),field('status','Visibility','select',d.status,pubOptions),field('publishAt','Publish at (platform timezone)','datetime-local',localDate(d.publish_at))],(data,form,dialog)=>saveRefresh('documents.save',{...data,id:d.id,publishAt:iso(data.publishAt)},dialog));}
-async function moveChapter(direction){const chapters=state.chapters.filter(c=>c.course_id===courseId),i=chapters.findIndex(c=>c.id===chapterId),j=i+direction;if(j<0||j>=chapters.length)return;[chapters[i],chapters[j]]=[chapters[j],chapters[i]];await saveRefresh('chapters.reorder',{courseId,ids:chapters.map(c=>c.id)});}
-function duplicateCourse(c){formModal('Copy course',[field('name','Course name','text',c.name),field('yearId','Destination year','select',yearId,yearOptions())],(data,form,dialog)=>saveRefresh('courses.duplicate',{...data,id:c.id},dialog),'Copy','The copy starts hidden. Original files are preserved.');}
-function resourceUpload(parentId,category='resource'){const f=field('files','Choose files','file');const input=f.querySelector('input');input.multiple=true;input.required=true;if(category==='resource')input.accept='.pdf,.pptx';formModal('Upload documents',[f],async(data,form,dialog)=>{const p=el('progress',{max:100,value:0});form.append(p);for(const file of data.files){await upload(file,category,parentId,file.name.replace(/\.[^.]+$/,''),(v,t)=>{p.value=v;dialog.querySelector('.dialog-status').textContent=t;});}dialog.close();await refresh();msg('Upload saved. Publish new course documents when ready.','success');},'Upload','Maximum 50 MB per file.');}
-function resourceList(view,data){const search=el('input',{type:'search',class:'search',placeholder:'Search resources','aria-label':'Search resources'}),list=el('div');view.append(search,list);const draw=()=>{list.replaceChildren();const q=search.value.toLowerCase();for(const chapter of data.chapters){const docs=data.documents.filter(d=>(d.chapterId||d.chapter_id)===chapter.id&&(!q||[chapter.name,d.title].join(' ').toLowerCase().includes(q)));if(q&&!docs.length)continue;list.append(panel(heading(chapter.name),docs.length?docs.map(d=>el('div',{class:'resource'},el('div',{},el('strong',{},d.title),d.example?badge('Example'):null,el('div',{class:'meta'},d.file?d.file.name.split('.').pop().toUpperCase()+' · '+size(d.file.size)+' · '+date(d.file.created):'')),actions(d.file?button(d.file.mime==='application/pdf'?'View PDF':'Download',()=>openFile(d.fileId||d.file_id,d.file.name,d.file.mime)):null,d.file?button('Download',()=>downloadFile(d.fileId||d.file_id,d.file.name)):null))):empty('No published documents.')));}if(!list.children.length)list.append(empty(q?'No matching resources.':'No published chapters.'));};search.addEventListener('input',draw);draw();}
-function studentResources(view){resourceList(view,state);}
-async function downloadFile(id,name){msg('Downloading…');const blob=await api('/files/'+encodeURIComponent(id),'GET',undefined,true);download(blob,name);msg();}
-async function openFile(id,name,mime){if(mime!=='application/pdf')return downloadFile(id,name);msg('Opening PDF…');const blob=await api('/files/'+encodeURIComponent(id)+'?inline=1','GET',undefined,true),bytes=new Uint8Array(await blob.arrayBuffer());const pdf=await getDocument({data:bytes,isEvalSupported:false,stopAtErrors:true,cMapUrl:new URL('./vendor/pdfjs/cmaps/',import.meta.url).href,cMapPacked:true,standardFontDataUrl:new URL('./vendor/pdfjs/standard_fonts/',import.meta.url).href,wasmUrl:new URL('./vendor/pdfjs/wasm/',import.meta.url).href}).promise;let page=1;const canvas=el('canvas'),count=el('span'),surface=el('div',{class:'pdf-surface'},canvas),text=el('details',{class:'details'},el('summary',{},'Page text'),el('p'));const draw=async()=>{const p=await pdf.getPage(page),base=p.getViewport({scale:1}),viewport=p.getViewport({scale:Math.min(1000,Math.max(240,surface.clientWidth-32))/base.width}),scale=Math.min(devicePixelRatio||1,2);canvas.width=viewport.width*scale;canvas.height=viewport.height*scale;canvas.style.width=viewport.width+'px';await p.render({canvasContext:canvas.getContext('2d'),viewport,transform:scale===1?null:[scale,0,0,scale,0,0]}).promise;count.textContent='Page '+page+' / '+pdf.numPages;text.querySelector('p').textContent=(await p.getTextContent()).items.map(i=>i.str||'').join(' ')||'Blank page.';};const dialog=modal(name,el('div',{},actions(button('Previous',async()=>{if(page>1){page--;await draw();}}),count,button('Next',async()=>{if(page<pdf.numPages){page++;await draw();}}),button('Download',()=>download(blob,name))),surface,text),true);dialog.addEventListener('close',()=>pdf.destroy());await draw();msg();}
-function teacherStudents(view){courseNav(view);const enrollments=state.enrollments.filter(e=>e.course_id===courseId),ids=new Set(enrollments.map(e=>e.student_id));const students=state.students.filter(s=>ids.has(s.id));
- view.append(panel(heading('Students',button('+ Add student',()=>studentForm()),button('Import CSV / XLSX',()=>importStudents()),button('Export XLSX',()=>spreadsheet(['First name','Last name','Email','Course','Active'],students.map(s=>[s.first_name,s.last_name,s.email,courseName(enrollments.find(e=>e.student_id===s.id).course_id),s.active?'Yes':'No']),'students'))),students.length?table(['Name','Email','Access','Actions'],students.map(s=>{const e=enrollments.find(e=>e.student_id===s.id);return [s.first_name+' '+s.last_name,s.email,badge(s.active&&e.status==='active'?'active':'inactive'),actions(button('Edit / transfer',()=>studentForm(s,e),'secondary small'),button('New code',()=>confirmAction('Replace student code?','The old code and sessions will stop working. Save the new code after it appears.',()=>saveRefresh('students.code',{id:e.id})),'secondary small'),button(s.active?'Deactivate':'Activate',()=>saveRefresh('students.deactivate',{id:s.id,active:!s.active}),'secondary small'))];})):empty('No students in this course.')));
+const localDate = (value) => {
+  if (!value) return "";
+  const p = wallParts(value);
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+};
+function iso(value) {
+  if (!value) return null;
+  const [y, m, d, h, min] = value.split(/[-T:]/).map(Number),
+    target = Date.UTC(y, m - 1, d, h, min);
+  let guess = target;
+  for (let i = 0; i < 3; i++) {
+    const p = wallParts(guess),
+      actual = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute);
+    guess += target - actual;
+  }
+  if (localDate(guess) !== value)
+    throw new Error(
+      "This time does not exist in the platform timezone. Choose another time.",
+    );
+  return new Date(guess).toISOString();
 }
-function studentForm(s,e){if(!courseId){msg('Add a course first.','error');return;}formModal(s?'Edit student':'Add student',[field('firstName','First name','text',s?.first_name),field('lastName','Last name','text',s?.last_name),field('email','Email','email',s?.email),field('courseId','Course','select',e?.course_id||courseId,courseOptions()),...(s?[field('active','Active','check',!!s.active)]:[])],(data,form,dialog)=>saveRefresh('students.save',{...data,id:s?.id,yearId},dialog));}
-function showCodes(){if(!issuedCodes.length)return;const codes=[...issuedCodes];modal('Save the student codes',el('div',{},help('Codes are shown only now. Save this file privately and give each student only their own code.'),table(['Name','Email','Code'],codes.map(s=>[s.firstName+' '+s.lastName,s.email,el('span',{class:'code'},s.code)])),actions(button('Download XLSX',()=>spreadsheet(['First name','Last name','Email','Student code'],codes.map(s=>[s.firstName,s.lastName,s.email,s.code]),'student-codes'),'primary'),button('Download CSV',()=>csvDownload(['First name','Last name','Email','Student code'],codes.map(s=>[s.firstName,s.lastName,s.email,s.code]),'student-codes.csv')))),true).addEventListener('close',()=>{issuedCodes=[];});}
-function csvDownload(headers,rows,name){const cell=v=>'"'+String(v??'').replace(/^[=+@\-\t\r]/,"'$&").replace(/"/g,'""')+'"';download(new Blob(['\ufeff'+[headers,...rows].map(r=>r.map(cell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),name);}
-function parseCSV(text){const rows=[];let row=[],value='',quoted=false;for(let i=0;i<text.length;i++){const c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){value+='"';i++;}else quoted=!quoted;}else if(c===','&&!quoted){row.push(value);value='';}else if((c==='\r'||c==='\n')&&!quoted){if(c==='\r'&&text[i+1]==='\n')i++;row.push(value);if(row.some(v=>v.trim()))rows.push(row);row=[];value='';}else value+=c;}if(quoted)throw new Error('Unclosed quote in CSV.');row.push(value);if(row.some(v=>v.trim()))rows.push(row);return rows;}
-async function readRows(file){if(file.size>10*1048576)throw new Error('Spreadsheet limit: 10 MB.');if(/\.csv$/i.test(file.name))return parseCSV((await file.text()).replace(/^\ufeff/,''));if(!/\.xlsx$/i.test(file.name))throw new Error('Choose CSV or XLSX.');const ExcelJS=await library('ExcelJS'),book=new ExcelJS.Workbook();await book.xlsx.load(await file.arrayBuffer());const sheet=book.worksheets[0];if(!sheet)throw new Error('The workbook is empty.');if(sheet.rowCount>2001||sheet.columnCount>40)throw new Error('Use at most 2,000 rows and 40 columns.');const rows=[];sheet.eachRow(row=>rows.push(Array.from({length:sheet.columnCount},(_,i)=>row.getCell(i+1).text)));return rows;}
-function importStudents(){if(!courseId){msg('Add a course first.','error');return;}const f=field('file','Student list','file');f.querySelector('input').accept='.csv,.xlsx';f.querySelector('input').required=true;formModal('Import students',[f],async(data,form,dialog)=>{const rows=await readRows(data.file[0]),headers=rows.shift().map(h=>h.toLowerCase().replace(/[\s_-]/g,''));const first=headers.findIndex(h=>['firstname','prénom','prenom'].includes(h)),last=headers.findIndex(h=>['lastname','surname','nom'].includes(h)),email=headers.findIndex(h=>['email','emailaddress','courriel'].includes(h));if([first,last,email].some(i=>i<0))throw new Error('Headers required: First name, Last name, Email.');importRows=rows.map(r=>({firstName:r[first]||'',lastName:r[last]||'',email:r[email]||''}));const preview=await command('students.preview',{yearId,courseId,rows:importRows});dialog.close();const body=el('div',{},help('Existing email addresses will be updated and enrolled in this course for '+state.year.label+'.'),table(['Row','First name','Last name','Email','Result'],preview.rows.map(r=>[r.row,r.firstName||'',r.lastName||'',r.email||'',r.error||r.action])));const d=modal('Import preview',body,true);body.append(button('Import '+preview.rows.length+' students',async()=>{if(!preview.valid)throw new Error('Correct the rows with errors before importing.');await saveRefresh('students.import',{yearId,courseId,rows:importRows},d);importRows=[];},preview.valid?'primary':'secondary'));},'Preview','CSV / XLSX · First name, Last name, Email · Up to 500 students per import.');}
-function teacherAnnouncements(view){view.append(panel(heading('Announcements',button('+ New announcement',()=>announcementForm())),help('Website announcements. Email delivery is off.'),state.announcements.length?state.announcements.map(a=>el('div',{class:'resource'},el('div',{},el('strong',{},a.title),badge(a.status),help(JSON.parse(a.course_ids).map(courseName).join(', ')+' · '+a.readCount+' read')),actions(button('Edit / publish',()=>announcementForm(a)),button('Attach file',()=>resourceUpload(a.id,'announcement')),button('Archive',()=>saveRefresh('announcements.delete',{id:a.id}))))):empty('No announcements.')));}
-function announcementForm(a){const opts=[{value:'draft',label:'Draft'},{value:'published',label:'Published'},{value:'scheduled',label:'Scheduled'},{value:'archived',label:'Archived'}];formModal(a?'Edit announcement':'New announcement',[field('title','Title','text',a?.title),field('body','Message','textarea',a?.body),field('courseIds','Courses (choose one or more)','multi',a?JSON.parse(a.course_ids):courseId?[courseId]:[],courseOptions()),field('status','Visibility','select',a?.status||'draft',opts),field('publishAt','Publish at (platform timezone)','datetime-local',localDate(a?.publish_at))],(data,form,dialog)=>saveRefresh('announcements.save',{...data,id:a?.id,yearId,publishAt:iso(data.publishAt)},dialog));}
-function studentAnnouncements(view){if(!state.announcements.length){view.append(empty('No announcements.'));return;}for(const a of state.announcements)view.append(el('section',{class:'panel'+(!a.read?' unread':'')},heading(a.title,!a.read?badge('Unread'):null),help(date(a.date)),el('p',{},a.body),actions(a.attachments.map(id=>button('Download attachment',()=>downloadFile(id,'attachment'))),!a.read?button('Mark as read',()=>saveRefresh('announcements.read',{id:a.id})):null)));}
-function teacherAttendance(view){courseNav(view);const sessions=state.attendanceSessions.filter(s=>s.course_id===courseId);view.append(panel(heading('Attendance',button('+ New session',()=>formModal('New attendance session',[field('date','Date','date',new Date().toISOString().slice(0,10)),field('time','Time','time'),field('title','Session title','text')],async(data,form,dialog)=>{const result=await saveRefresh('attendance.create',{...data,courseId},dialog);await attendanceEditor(result.id);})),button('Reports',attendanceReports)),sessions.length?table(['Date','Session','Status',''],sessions.map(s=>[date(s.date)+' '+s.time,s.title,badge(s.finalized?'Finalized':'Draft'),button('Open roster',()=>attendanceEditor(s.id))])):empty('No attendance sessions.')));}
-async function attendanceEditor(id){const data=await api('/attendance/'+id),controls=[];const body=el('div'),rows=data.students.map(s=>{const record=data.records.find(r=>r.student_id===s.id);const select=field('status-'+s.id,'Status for '+s.first_name+' '+s.last_name,'select',record?.status||'',[{value:'',label:'Choose'},...['present','absent','late','excused'].map(v=>({value:v,label:v[0].toUpperCase()+v.slice(1)}))]).querySelector('select'),note=el('input',{value:record?.note||'',maxLength:500,'aria-label':'Note for '+s.first_name+' '+s.last_name});controls.push({studentId:s.id,select,note});return [s.first_name+' '+s.last_name,select,note];});const d=modal('Attendance · '+date(data.session.date),body,true);const save=async(finalized)=>{const records=controls.filter(c=>c.select.value).map(c=>({studentId:c.studentId,status:c.select.value,note:c.note.value}));if(finalized&&records.length!==controls.length)throw new Error('Mark every student before finalizing.');await command('attendance.save',{id,revision:data.session.revision,records,finalized});d.close();await refresh();};body.append(actions(button('Mark all present',()=>{controls.forEach(c=>{c.select.value='present';});}),button('Save draft',()=>save(false)),button('Finalize',()=>save(true),'primary')),table(['Student','Status','Note'],rows),help('Only finalized records appear to students.'));
+const courseName = (id) => state.courses?.find((c) => c.id === id)?.name || "";
+const studentName = (id) => {
+  const s = state.students?.find((s) => s.id === id);
+  return s ? s.first_name + " " + s.last_name : "";
+};
+const enrollmentName = (id) =>
+  studentName(state.enrollments?.find((e) => e.id === id)?.student_id);
+function table(headers, rows) {
+  return el(
+    "div",
+    { class: "table-wrap" },
+    el(
+      "table",
+      {},
+      el(
+        "thead",
+        {},
+        el(
+          "tr",
+          {},
+          headers.map((h) => el("th", { scope: "col" }, h)),
+        ),
+      ),
+      el(
+        "tbody",
+        {},
+        rows.map((cells) =>
+          el(
+            "tr",
+            {},
+            cells.map((c) => el("td", {}, c)),
+          ),
+        ),
+      ),
+    ),
+  );
 }
-async function attendanceReports(){const course=field('courseId','Course','select',courseId,[{value:'',label:'All courses'},...courseOptions()]),from=field('from','From','date'),to=field('to','To','date'),result=el('div');const controls=el('div',{class:'form-grid'},course,from,to),body=el('div',{},controls);const load=async()=>{const params=new URLSearchParams({yearId,courseId:course.querySelector('select').value,from:from.querySelector('input').value,to:to.querySelector('input').value});const report=await api('/attendance-report?'+params);const rows=report.summaries.map(s=>[s.firstName+' '+s.lastName,s.present,s.absent,s.late,s.excused,s.percentage===null?'—':s.percentage+'%']);result.replaceChildren(actions(button('Export XLSX',()=>spreadsheet(['Student','Present','Absent','Late','Excused','Attendance'],rows,'attendance')),button('Print / Save as PDF',()=>printReport('Attendance · '+state.year.label,['Student','Present','Absent','Late','Excused','Attendance'],rows))),table(['Student','Present','Absent','Late','Excused','Attendance'],rows),help('Percentages use finalized sessions and the policy in Settings.'));};body.append(button('Apply filters',load),result);modal('Attendance reports',body,true);await load();}
-function printReport(title,headers,rows){const area=el('div',{id:'print-report'},el('h1',{},title),table(headers,rows));document.body.append(area);document.body.classList.add('printing');window.print();area.remove();document.body.classList.remove('printing');}
-function studentAttendance(view){const report=state.attendance,s=report.summaries[0];if(s)view.append(el('div',{class:'stats'},[['Attendance',s.percentage===null?'—':s.percentage+'%'],['Absent',s.absent],['Late',s.late],['Excused',s.excused]].map(([label,value])=>el('div',{class:'stat'},label,el('strong',{},value)))));view.append(panel(heading('My attendance'),report.records.length?table(['Date','Session','Status','Note'],report.records.map(r=>[date(r.date),r.title,badge(r.status),r.note])):empty('No finalized attendance records.')));}
-function teacherAssignments(view){courseNav(view);const assignments=state.assignments.filter(a=>a.course_id===courseId);view.append(panel(heading('Assignments',button('+ New assignment',()=>assignmentForm())),assignments.length?assignments.map(a=>el('div',{class:'resource'},el('div',{},el('strong',{},a.title),badge(a.status),help('Deadline: '+date(a.deadline)+' · '+state.submissions.filter(s=>s.assignment_id===a.id&&state.submissionFiles.some(f=>f.submission_id===s.id)).length+' submissions')),actions(button('Edit',()=>assignmentForm(a)),button('Submissions',()=>submissionsView(a)),button('Extension',()=>extensionForm(a,'assignment'))))):empty('No assignments.')));}
-function assignmentForm(a){if(!courseId){msg('Add a course first.','error');return;}formModal(a?'Edit assignment':'New assignment',[field('title','Title','text',a?.title),field('body','Instructions','textarea',a?.body),field('deadline','Deadline (platform timezone)','datetime-local',localDate(a?.deadline)),field('status','Visibility','select',a?.status||'draft',[{value:'draft',label:'Draft'},{value:'published',label:'Published'},{value:'closed',label:'Closed'}]),el('div',{class:'form-grid'},field('maxFileMB','Maximum MB per file','number',a?a.max_file_bytes/1048576:10),field('maxTotalMB','Maximum MB per submission','number',a?a.max_total_bytes/1048576:50)),field('allowLate','Allow late work','check',!!a?.allow_late),field('allowReplace','Allow replacing / removing files','check',a?!!a.allow_replace:true),field('groups','Allow group submissions','check',!!a?.groups)],(data,form,dialog)=>saveRefresh('assignments.save',{...data,id:a?.id,courseId,deadline:iso(data.deadline),maxFileBytes:Number(data.maxFileMB)*1048576,maxTotalBytes:Number(data.maxTotalMB)*1048576},dialog));}
-function submissionsView(a){const list=state.submissions.filter(s=>s.assignment_id===a.id),allFiles=state.submissionFiles.filter(f=>list.some(s=>s.id===f.submission_id)&&f.file);const body=el('div',{},actions(button('Download ZIP',()=>bulkZIP(a,allFiles)),button('Export grades XLSX',()=>spreadsheet(['Student / group owner','Submitted','Late','Grade','Feedback'],list.map(s=>[enrollmentName(s.enrollment_id),s.submitted_at,s.late?'Yes':'No',s.grade,s.feedback]),a.title+'-grades'))),help('ZIP download limit: 100 MB at a time. Larger files can be downloaded individually.'));const rows=list.filter(s=>allFiles.some(f=>f.submission_id===s.id)).map(s=>[enrollmentName(s.enrollment_id)+(s.group_id?' (group)':''),date(s.submitted_at)+(s.late?' · Late':''),el('div',{class:'list'},allFiles.filter(f=>f.submission_id===s.id).map(f=>button(f.file.name,()=>openFile(f.file_id,f.file.name,f.file.mime),'secondary small'))),s.grade||'—',button('Feedback / grade',()=>formModal('Feedback',[field('grade','Grade','text',s.grade),field('feedback','Feedback','textarea',s.feedback),field('retentionExempt','Keep files when this year is cleaned up','check',!!s.retention_exempt)],async(data,form,dialog)=>{await saveRefresh('submissions.feedback',{...data,id:s.id},dialog);d.close();submissionsView(state.assignments.find(x=>x.id===a.id));}))]);body.append(rows.length?table(['Student','Submitted','Files','Grade',''],rows):empty('No submitted files.'));const d=modal(a.title+' · Submissions',body,true);}
-async function bulkZIP(a,files){const total=files.reduce((s,f)=>s+f.file.size,0);if(!files.length)throw new Error('No submitted files.');if(total>100*1048576)throw new Error('This ZIP exceeds 100 MB. Download files individually.');const JSZip=await library('JSZip'),zip=new JSZip();for(const [i,f] of files.entries()){msg('Downloading '+(i+1)+' / '+files.length+'…');const s=state.submissions.find(s=>s.id===f.submission_id),folder=enrollmentName(s.enrollment_id).replace(/[^a-zA-Z0-9 _-]/g,'_')+'-'+s.id.slice(0,8);zip.file(folder+'/'+f.file.id.slice(0,8)+'-'+f.file.name,await api('/files/'+f.file_id,'GET',undefined,true));}download(await zip.generateAsync({type:'blob',compression:'STORE'}),a.title.replace(/[\\/]/g,'_')+'.zip');msg();}
-function extensionForm(parent,kind){const options=state.enrollments.filter(e=>e.course_id===parent.course_id).map(e=>({value:e.id,label:enrollmentName(e.id)}));formModal('Student deadline extension',[field('enrollmentId','Student','select','',options),field('closesAt','New deadline (platform timezone)','datetime-local')],(data,form,dialog)=>saveRefresh('exceptions.save',{...data,parentId:parent.id,kind,closesAt:iso(data.closesAt)},dialog));}
-function groupControls(parentId,kind,group,hasEntry=false){if(group)return help('Group connected · '+group.members+' members');if(hasEntry)return help('Individual submission');return actions(button('Create group',async()=>{const r=await command('groups.create',{parentId,kind});modal('Group invitation',el('div',{},help('Give this invitation code only to your group members. It is separate from your student sign-in code.'),el('p',{class:'code'},r.invitationCode)));await refresh();}),button('Join group',()=>formModal('Join group',[field('code','Group invitation code','text')],(data,form,dialog)=>saveRefresh('groups.join',{...data,parentId,kind},dialog))));}
-function studentAssignments(view){if(!state.assignments.length){view.append(empty('No assignments.'));return;}for(const a of state.assignments){const s=state.submissions.find(s=>s.assignmentId===a.id),files=s?.files||[];view.append(panel(heading(a.title,badge(a.status)),el('p',{},a.body),help('Deadline: '+date(a.deadline)+' · '+size(a.maxFileBytes)+' per file · '+size(a.maxTotalBytes)+' total'+(a.allowLate?' · Late work accepted':'')),a.groups?groupControls(a.id,'assignment',a.group,!!s):null,files.length?el('div',{class:'list'},files.map(f=>el('div',{class:'resource'},el('div',{},el('strong',{},f.name),help(size(f.size))),actions(button('View',()=>openFile(f.id,f.name,f.mime)),a.allowReplace&&a.status==='published'?button('Remove',()=>confirmAction('Remove submitted file?','This file will be deleted from storage.',()=>saveRefresh('files.remove',{id:f.id})),'danger'):null)))):help('No files submitted.'),a.status==='published'?button('+ Submit files',()=>submissionUpload(a),'primary'):null,s?.feedback||s?.grade?el('div',{class:'notice'},s.grade?el('strong',{},'Grade: '+s.grade):null,el('p',{},s.feedback)):null));}}
-function submissionUpload(a){const f=field('files','Choose files','file');f.querySelector('input').multiple=true;f.querySelector('input').required=true;formModal('Submit · '+a.title,[f],async(data,form,dialog)=>{const p=el('progress',{max:100,value:0});form.append(p);for(const file of data.files)await upload(file,'submission',a.id,null,(v,t)=>{p.value=v;dialog.querySelector('.dialog-status').textContent=t;});dialog.close();await refresh();msg('Files submitted.','success');},'Submit','Documents, archives, images, and source code · Maximum '+size(a.maxFileBytes)+' per file / '+size(a.maxTotalBytes)+' total. Files are visible only to you, your group if applicable, and your teacher.');}
-function teacherProjects(view){courseNav(view);const sheets=state.sheets.filter(s=>s.course_id===courseId);view.append(panel(heading('Project sheets',button('+ Create template',()=>templateEditor()),button('Import XLSX / CSV',()=>templateImport()),button('Assign template',()=>assignTemplate())),sheets.length?sheets.map(s=>el('div',{class:'resource'},el('div',{},el('strong',{},s.title),badge(s.status),help('Closes: '+date(s.closes_at))),actions(button('Open table',()=>openSheet(s.id)),button('Publish / dates',()=>sheetForm(s)),button('Extension',()=>extensionForm(s,'sheet'))))):empty('Assign a template to create a project sheet.')));
- view.append(panel(heading('Templates'),state.templates.length?table(['Template','Version',''],state.templates.map(t=>[t.title,t.version,actions(button('Edit columns',()=>templateEditor(t)),t.original_file_id?button('Original file',()=>downloadFile(t.original_file_id,t.title+'.xlsx')):null)])):empty('No templates.')));
+function download(blob, name) {
+  const url = URL.createObjectURL(blob),
+    a = el("a", { href: url, download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
-function templateEditor(template,initialColumns,originalFile){const rows=[],list=el('div');const body=el('form'),title=field('title','Template title','text',template?.title||originalFile?.name.replace(/\.[^.]+$/,'')||'');body.append(title);const add=(definition={})=>{const controls={id:definition.id||'col_'+crypto.randomUUID().replaceAll('-',''),label:field('label','Column name','text',definition.label||''),type:field('type','Type','select',definition.type||'text',['text','number','date','select'].map(v=>({value:v,label:v}))),protected:field('protected','Teacher edits only','check',definition.protected),teacherOnly:field('teacherOnly','Visible only to teacher','check',definition.teacherOnly),options:field('options','Choices, separated by commas','text',(definition.options||[]).join(', '))};const card=panel(el('div',{class:'form-grid'},controls.label,controls.type,controls.protected,controls.teacherOnly),controls.options);card.append(button('Remove column',()=>{rows.splice(rows.indexOf(controls),1);card.remove();},'danger small'));rows.push(controls);list.append(card);};
- (template?JSON.parse(template.columns_json):initialColumns||[{id:'student_name',label:'Student name',protected:true},{id:'topic',label:'Project topic'},{id:'description',label:'Description'}]).forEach(add);body.append(list,actions(button('+ Add column',()=>add()),el('button',{type:'submit',class:'button'},'Save template')));const d=modal(template?'Edit template':'Create template',body,true);body.addEventListener('submit',e=>{e.preventDefault();run(async()=>{const columns=rows.map(r=>({id:r.id,label:r.label.querySelector('input').value,type:r.type.querySelector('select').value,protected:r.protected.querySelector('input').checked,teacherOnly:r.teacherOnly.querySelector('input').checked,options:r.options.querySelector('input').value.split(',').map(v=>v.trim()).filter(Boolean)}));const result=await command('templates.save',{id:template?.id,title:title.querySelector('input').value,columns});if(originalFile){await upload(originalFile,'template',result.id,null,(v,t)=>{d.querySelector('.dialog-status').textContent=t+' '+v+'%';});}d.close();await refresh();msg('Template saved. Existing sheets keep their own columns.','success');});});}
-function templateImport(){const f=field('file','Template file','file');f.querySelector('input').accept='.xlsx,.csv';f.querySelector('input').required=true;formModal('Import template',[f],async(data,form,dialog)=>{const file=data.file[0],rows=await readRows(file);const headers=rows[0]?.filter(Boolean);if(!headers?.length)throw new Error('Add column names to the first row.');const defs=headers.map((label,i)=>({id:'column_'+i,label:String(label)}));dialog.close();templateEditor(null,defs,file);},'Preview columns','The first row supplies column names. Formulas and macros are not imported. The original file is preserved privately.');}
-function assignTemplate(){formModal('Assign template',[field('templateId','Template','select','',state.templates.map(t=>({value:t.id,label:t.title}))),field('courseIds','Courses (choose one or more)','multi',courseId?[courseId]:[],courseOptions())],(data,form,dialog)=>saveRefresh('sheets.assign',{...data,yearId},dialog),'Assign','Each course and year receives an independent copy, initially hidden.');}
-function sheetForm(s){formModal('Project sheet settings',[field('title','Title','text',s.title),field('status','Visibility','select',s.status,[{value:'hidden',label:'Hidden'},{value:'published',label:'Published'}]),field('opensAt','Editing opens (platform timezone)','datetime-local',localDate(s.opens_at)),field('closesAt','Editing closes (platform timezone)','datetime-local',localDate(s.closes_at))],(data,form,dialog)=>saveRefresh('sheets.save',{...data,id:s.id,opensAt:iso(data.opensAt),closesAt:iso(data.closesAt)},dialog));}
-async function openSheet(id){const data=await api('/sheets/'+id),body=el('div'),columns=data.sheet.columns;const redraw=async()=>{dialog.close();await openSheet(id);};const entries=data.entries;const controls=teacher?actions(button('+ Add row',()=>entryForm(null)),button('Export XLSX',()=>spreadsheet(['Student / group owner',...columns.map(c=>c.label)],entries.filter(e=>!e.deleted).map(e=>[e.ownerName,...columns.map(c=>e.values[c.id]||'')]),data.sheet.title))):el('div',{},groupControls(id,'sheet',data.group,entries.some(e=>e.canEdit)),data.canEdit&&!entries.some(e=>e.canEdit)?button('+ Add my project',()=>entryForm(null),'primary'):null);
- body.append(help('Editing closes: '+date(data.sheet.closes_at)),controls,entries.length?table(['Student / group owner',...columns.map(c=>c.label),'Actions'],entries.map(e=>[e.ownerName+(e.deleted?' · Removed':''),...columns.map(c=>el('div',{class:'sheet-cell'},e.values[c.id]||'')),actions((teacher||data.canEdit&&e.canEdit)&&!e.deleted?button('Edit',()=>entryForm(e),'secondary small'):null,(teacher||data.canEdit&&e.canEdit)&&!e.deleted?button('Remove',()=>confirmAction('Remove project row?','The revision history is kept for your teacher.',async()=>{await command('projects.delete',{id:e.id,sheetId:id,revision:e.revision});await redraw();}),'danger small'):null,teacher?button('History / restore',()=>historyView(e),'secondary small'):null)])):empty('No projects entered.'));
- const dialog=modal(data.sheet.title,body,true);
- function entryForm(entry){const defs=columns.filter(c=>teacher||!c.protected&&!c.teacherOnly),fields=defs.map(c=>field(c.id,c.label,c.type==='select'?'select':c.type==='number'?'number':c.type==='date'?'date':'textarea',entry?.values[c.id]||'',c.options.map(v=>({value:v,label:v}))));if(teacher&&!entry)fields.unshift(field('enrollmentId','Student / group owner','select','',state.enrollments.filter(e=>e.course_id===data.sheet.course_id).map(e=>({value:e.id,label:enrollmentName(e.id)}))));formModal('Project row',fields,async(values,form,d)=>{await command('projects.save',{id:entry?.id,sheetId:id,revision:entry?.revision,enrollmentId:values.enrollmentId,values});d.close();await redraw();});}
- async function historyView(entry){const h=await api('/project-history/'+entry.id);const d=modal('Revision history',table(['Revision','Saved','Changes',''],h.history.map(r=>[r.revision,date(r.created),el('div',{},Object.entries(JSON.parse(r.after_json).values).map(([key,value])=>el('p',{},(columns.find(c=>c.id===key)?.label||key)+': '+value))),button('Restore',async()=>{await command('projects.restore',{id:entry.id,sheetId:id,revision:entry.revision,historyId:r.id});d.close();await redraw();})])),true);}
+const jsonDownload = (value, name) =>
+  download(
+    new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }),
+    name,
+  );
+async function library(name) {
+  if (window[name]) return window[name];
+  const script = el("script", {
+    src: new URL(
+      name === "ExcelJS"
+        ? "./vendor/exceljs/exceljs.min.js"
+        : "./vendor/jszip/jszip.min.js",
+      import.meta.url,
+    ).href,
+  });
+  await new Promise((resolve, reject) => {
+    script.onload = resolve;
+    script.onerror = () =>
+      reject(new Error("The spreadsheet library could not load."));
+    document.head.append(script);
+  });
+  return window[name];
 }
-function studentProjects(view){view.append(...(state.sheets.length?state.sheets.map(s=>panel(heading(s.title,button('Open project table',()=>openSheet(s.id),'primary')),help('Closes: '+date(s.closesAt)))):[empty('No project sheets.')]));}
-async function teacherSettings(view){
- const storage=panel(heading('File storage'),help('Loading Google Drive status…'));view.append(storage);
- const policy=panel(heading('Attendance policy'),button('Edit policy',()=>formModal('Attendance policy',[field('timezone','Timezone','text',state.settings.timezone),field('lateWeight','Late arrival counts as','select',String(state.settings.lateWeight),[{value:'1',label:'Present (100%)'},{value:'0.5',label:'Half (50%)'},{value:'0',label:'Absent (0%)'}]),field('excused','Excused absence','select',state.settings.excused,[{value:'exclude',label:'Exclude from calculation'},{value:'present',label:'Count as present'},{value:'absent',label:'Count as absent'}])],(data,form,d)=>saveRefresh('settings.save',data,d))),help('Late: '+state.settings.lateWeight*100+'% · Excused: '+state.settings.excused+' · '+state.settings.timezone));
- view.append(policy,panel(heading('Academic years',button('+ Add year',()=>formModal('Academic year',[field('label','Year label','text'),field('starts','Start date','date')],(data,form,d)=>saveRefresh('years.save',data,d)))),table(['Year','Starts','Status',''],state.years.map(y=>[y.label,date(y.starts),badge(y.active?'active':'archived'),!y.active?button('Make active',()=>confirmAction('Activate '+y.label+'?','Students from other years will lose access. Historical records are preserved.',()=>saveRefresh('years.activate',{id:y.id}))):null]))),panel(heading('Private export',button('Export database JSON',async()=>jsonDownload(await api('/export'),'tasnim-classroom-private-export.json'))),help('Contains private student records and access-code hashes. Keep this download private. Files are downloaded separately.')),panel(heading('Website announcements'),help('Email delivery is off. Annual code renewal and automatic file deletion are deferred.')));
- try{const connection=await api('/storage');if(!storage.isConnected)return;storage.replaceChildren(heading('File storage'),badge(connection.connected?'Connected':'Not connected'),help('Google Drive · Classroom files are private. Students use their classroom code.'),connection.quota?help('Drive usage: '+size(Number(connection.quota.usage||0))+(connection.quota.limit?' / '+size(Number(connection.quota.limit)):'')):null,actions(button(connection.connected?'Reconnect Google Drive':'Connect Google Drive',async()=>{const result=await api('/storage/google-drive/start','POST',{});location.assign(result.url);},'primary'),button('Owner app setup',()=>formModal('Google Drive app setup',[field('clientId','Google OAuth client ID','text',connection.clientId),field('clientSecret','Client secret','password')],async(data,form,d)=>{await api('/storage/google-drive/configure','POST',data);form.querySelector('input[type=password]').value='';d.close();await refresh();},'Save securely','Owner setup only. The credential is encrypted on the server. Tasnim and students do not enter it during normal use.'))),help('OAuth callback: https://tasnim-classroom-service.chamseddine.chatgpt.site/api/lms/storage/google-drive/callback'));}catch(e){storage.replaceChildren(heading('File storage'),help(e.message));}
+async function spreadsheet(headers, rows, name) {
+  const ExcelJS = await library("ExcelJS"),
+    book = new ExcelJS.Workbook(),
+    sheet = book.addWorksheet("Data");
+  sheet.addRow(headers);
+  for (const row of rows)
+    sheet.addRow(
+      row.map((v) =>
+        v === null || v === undefined
+          ? ""
+          : typeof v === "number"
+            ? v
+            : String(v),
+      ),
+    );
+  sheet.getRow(1).font = { bold: true };
+  sheet.columns.forEach((c) => {
+    c.width = 26;
+  });
+  download(
+    new Blob([await book.xlsx.writeBuffer()], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }),
+    name + ".xlsx",
+  );
+}
+function field(name, label, type = "text", value = "", options = []) {
+  const id = "field-" + name + "-" + Math.random().toString(36).slice(2, 8);
+  let input;
+  if (type === "select" || type === "multi")
+    input = el(
+      "select",
+      { name, id, multiple: type === "multi" },
+      options.map((o) =>
+        el(
+          "option",
+          {
+            value: o.value,
+            selected:
+              type === "multi"
+                ? (value || []).includes(o.value)
+                : String(value) === String(o.value),
+          },
+          o.label,
+        ),
+      ),
+    );
+  else if (type === "textarea") input = el("textarea", { name, id, value });
+  else
+    input = el("input", {
+      name,
+      id,
+      type: type === "check" ? "checkbox" : type,
+      ...(type === "check"
+        ? { checked: !!value }
+        : { value: type === "file" ? "" : value || "" }),
+    });
+  return el(
+    "label",
+    { class: "field" + (type === "check" ? " check" : ""), htmlFor: id },
+    el("span", {}, label),
+    input,
+  );
+}
+const courseOptions = () =>
+  state.courses
+    .filter((c) => !c.archived)
+    .map((c) => ({ value: c.id, label: c.name }));
+const yearOptions = () =>
+  state.years.map((y) => ({ value: y.id, label: y.label }));
+const pubOptions = [
+  { value: "hidden", label: "Hidden" },
+  { value: "published", label: "Published" },
+  { value: "scheduled", label: "Scheduled" },
+];
+function modal(title, content, wide = false) {
+  const dialog = el("dialog", { class: wide ? "wide" : "" }),
+    close = button("Close", () => dialog.close(), "secondary small");
+  close.classList.add("close");
+  dialog.append(
+    close,
+    el("h2", {}, title),
+    el("p", { class: "dialog-status status", role: "status" }),
+    content,
+  );
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+  return dialog;
+}
+function formModal(title, fields, save, submit = "Save", note) {
+  const form = el(
+    "form",
+    {},
+    note ? help(note) : null,
+    fields,
+    el("button", { class: "button", type: "submit" }, submit),
+  );
+  const dialog = modal(title, form);
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    run(async () => {
+      const b = form.querySelector("button[type=submit]");
+      b.disabled = true;
+      try {
+        const data = {};
+        for (const input of form.elements) {
+          if (!input.name) continue;
+          data[input.name] =
+            input.type === "checkbox"
+              ? input.checked
+              : input.type === "select-multiple"
+                ? [...input.selectedOptions].map((o) => o.value)
+                : input.type === "file"
+                  ? input.files
+                  : input.value;
+        }
+        await save(data, form, dialog);
+      } finally {
+        b.disabled = false;
+      }
+    });
+  });
+  return dialog;
+}
+async function saveRefresh(action, data, dialog) {
+  const result = await command(action, data);
+  dialog?.close();
+  if (result.issuedCodes?.length) issuedCodes = result.issuedCodes;
+  await refresh();
+  msg("Saved.", "success");
+  if (result.issuedCodes?.length) showCodes();
+  return result;
+}
+function confirmAction(title, text, fn) {
+  let dialog;
+  dialog = modal(
+    title,
+    el(
+      "div",
+      {},
+      el("p", {}, text),
+      actions(
+        button("Cancel", () => dialog.close()),
+        button(
+          "Confirm",
+          async () => {
+            await fn();
+            dialog.close();
+          },
+          "danger",
+        ),
+      ),
+    ),
+  );
+}
+function login() {
+  authEpoch++;
+  state = null;
+  sessionActions.replaceChildren();
+  app.replaceChildren();
+  msg();
+  const form = el(
+    "form",
+    { autocomplete: "off" },
+    field(
+      "code",
+      teacher ? "Teacher access code" : "Student access code",
+      "password",
+    ),
+    el("button", { class: "button", type: "submit" }, "Sign in"),
+  );
+  const input = form.querySelector("input");
+  input.required = true;
+  input.autocomplete = "off";
+  input.maxLength = 100;
+  app.append(
+    el(
+      "section",
+      { class: "login" },
+      el("h1", {}, teacher ? "Teacher dashboard" : "Student access"),
+      form,
+    ),
+  );
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    run(async () => {
+      const submit = form.querySelector("button");
+      submit.disabled = true;
+      try {
+        await signIn(teacher ? "teacher" : "student", input.value);
+        input.value = "";
+        await refresh();
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  });
+}
+async function refresh() {
+  const epoch = authEpoch;
+  msg("Loading…");
+  const next = await api(
+    teacher
+      ? "/state" + (yearId ? "?yearId=" + encodeURIComponent(yearId) : "")
+      : "/student",
+  );
+  if (epoch !== authEpoch) return;
+  state = next;
+  if (teacher) {
+    yearId = state.year.id;
+    if (!state.courses.some((c) => c.id === courseId && !c.archived))
+      courseId = state.courses.find((c) => !c.archived)?.id;
+  }
+  render();
+  msg();
+}
+function render() {
+  sessionActions.replaceChildren(
+    button("Refresh", refresh, "secondary small"),
+    button(
+      "Sign out",
+      async () => {
+        authEpoch++;
+        try {
+          await signOut();
+        } finally {
+          issuedCodes = [];
+          importRows = [];
+          document.querySelectorAll("dialog").forEach((d) => d.close());
+          login();
+        }
+      },
+      "secondary small",
+    ),
+  );
+  app.replaceChildren();
+  const title = teacher ? "Classroom" : state.course.name;
+  const year = teacher
+    ? field("year", "Academic year", "select", yearId, yearOptions())
+    : badge(state.year.label);
+  if (teacher)
+    year.querySelector("select").addEventListener("change", (e) =>
+      run(async () => {
+        yearId = e.target.value;
+        courseId = null;
+        await refresh();
+      }),
+    );
+  app.append(
+    el(
+      "div",
+      { class: "toolbar" },
+      el(
+        "div",
+        {},
+        el("h1", {}, title),
+        teacher
+          ? help("Times: " + timezone())
+          : help(state.student.firstName + " " + state.student.lastName),
+      ),
+      year,
+    ),
+  );
+  const tabs = teacher
+    ? [
+        ["courses", "Courses"],
+        ["students", "Students"],
+        ["announcements", "Announcements"],
+        ["attendance", "Attendance"],
+        ["assignments", "Assignments"],
+        ["projects", "Projects"],
+        ["settings", "Settings"],
+      ]
+    : [
+        ["resources", "Resources"],
+        ["announcements", "Announcements"],
+        ["assignments", "Assignments"],
+        ["projects", "Projects"],
+        ["attendance", "Attendance"],
+      ];
+  app.append(
+    el(
+      "nav",
+      { class: "tabs", "aria-label": teacher ? "Teacher tools" : "Classroom" },
+      tabs.map(([id, label]) =>
+        el(
+          "button",
+          {
+            "aria-current": tab === id ? "page" : undefined,
+            onclick: () => {
+              tab = id;
+              render();
+            },
+          },
+          label +
+            (id === "announcements" &&
+            !teacher &&
+            state.announcements.some((a) => !a.read)
+              ? " •"
+              : ""),
+        ),
+      ),
+    ),
+  );
+  const view = el("div", { id: "view" });
+  app.append(view);
+  if (teacher)
+    ({
+      courses: teacherCourses,
+      students: teacherStudents,
+      announcements: teacherAnnouncements,
+      attendance: teacherAttendance,
+      assignments: teacherAssignments,
+      projects: teacherProjects,
+      settings: teacherSettings,
+    })[tab](view);
+  else
+    ({
+      resources: studentResources,
+      announcements: studentAnnouncements,
+      assignments: studentAssignments,
+      projects: studentProjects,
+      attendance: studentAttendance,
+    })[tab](view);
+}
+function courseNav(view) {
+  view.append(
+    el(
+      "nav",
+      { class: "course-nav", "aria-label": "Courses" },
+      state.courses
+        .filter((c) => !c.archived)
+        .map((c) =>
+          el(
+            "button",
+            {
+              "aria-current": courseId === c.id ? "page" : undefined,
+              onclick: () => {
+                courseId = c.id;
+                chapterId = null;
+                render();
+              },
+            },
+            c.name,
+          ),
+        ),
+    ),
+  );
+}
+function teacherCourses(view) {
+  courseNav(view);
+  const selected = state.courses.find((c) => c.id === courseId);
+  view.append(
+    actions(
+      button("+ Add course", () => courseForm()),
+      selected ? button("Rename course", () => courseForm(selected)) : null,
+      selected
+        ? button("Copy to another year", () => duplicateCourse(selected))
+        : null,
+      selected
+        ? button("Student preview", () =>
+            run(async () => {
+              const preview = await api(
+                "/preview?courseId=" + encodeURIComponent(selected.id),
+              );
+              const body = el("div");
+              resourceList(body, preview);
+              modal(selected.name + " · Student preview", body, true);
+            }),
+          )
+        : null,
+      selected
+        ? button(
+            "Remove course",
+            () =>
+              confirmAction(
+                "Remove course?",
+                "The course will be archived. Its files, students, and history are preserved.",
+                () =>
+                  saveRefresh("courses.archive", {
+                    id: selected.id,
+                    archived: true,
+                  }),
+              ),
+            "danger",
+          )
+        : null,
+    ),
+  );
+  const archived = state.courses.filter((c) => c.archived);
+  if (archived.length)
+    view.append(
+      el(
+        "details",
+        { class: "details" },
+        el("summary", {}, "Archived courses"),
+        archived.map((c) =>
+          el(
+            "div",
+            { class: "resource" },
+            c.name,
+            button("Restore", () =>
+              saveRefresh("courses.archive", { id: c.id, archived: false }),
+            ),
+          ),
+        ),
+      ),
+    );
+  if (!selected) {
+    view.append(empty("Add a course to begin."));
+    return;
+  }
+  const chapters = state.chapters.filter((c) => c.course_id === courseId);
+  if (!chapters.some((c) => c.id === chapterId)) chapterId = chapters[0]?.id;
+  const list = el(
+    "div",
+    { class: "list" },
+    chapters.map((c) =>
+      el(
+        "button",
+        {
+          class: "chapter-button",
+          "aria-current": c.id === chapterId ? "page" : undefined,
+          onclick: () => {
+            chapterId = c.id;
+            render();
+          },
+        },
+        c.name,
+        " ",
+        badge(c.status),
+      ),
+    ),
+  );
+  const aside = el(
+    "aside",
+    {},
+    heading(
+      "Chapters",
+      button("+ Add", () => chapterForm()),
+    ),
+    list,
+  );
+  const content = el("div");
+  view.append(el("div", { class: "split" }, aside, content));
+  const chapter = chapters.find((c) => c.id === chapterId);
+  if (!chapter) {
+    content.append(empty("Add a chapter. New chapters start hidden."));
+    return;
+  }
+  content.append(
+    panel(
+      heading(
+        chapter.name,
+        button("Edit / publish", () => chapterForm(chapter)),
+        button("Move up", () => moveChapter(-1)),
+        button("Move down", () => moveChapter(1)),
+        button(
+          "Remove",
+          () =>
+            confirmAction(
+              "Remove chapter?",
+              "The chapter and its documents will be removed from student access.",
+              () => saveRefresh("chapters.delete", { id: chapter.id }),
+            ),
+          "danger",
+        ),
+      ),
+      badge(chapter.status),
+      chapter.publish_at
+        ? help("Scheduled: " + date(chapter.publish_at))
+        : null,
+    ),
+  );
+  const docs = state.documents.filter((d) => d.chapter_id === chapter.id);
+  content.append(
+    panel(
+      heading(
+        "Documents",
+        button("+ Upload", () => resourceUpload(chapter.id)),
+      ),
+      help("PDF / PPTX · Maximum 50 MB per file · New documents start hidden."),
+      docs.length
+        ? docs.map((d) =>
+            el(
+              "div",
+              { class: "resource" },
+              el(
+                "div",
+                {},
+                el("strong", {}, d.title),
+                el(
+                  "div",
+                  { class: "meta" },
+                  badge(d.status),
+                  " · ",
+                  d.file ? size(d.file.size) + " · " + date(d.created) : "",
+                ),
+              ),
+              actions(
+                d.file
+                  ? button("View", () =>
+                      openFile(d.file.id, d.file.name, d.file.mime),
+                    )
+                  : null,
+                button("Edit / publish", () => documentForm(d)),
+                button(
+                  "Remove",
+                  () =>
+                    confirmAction(
+                      "Remove document?",
+                      "Students will no longer see this document.",
+                      () => saveRefresh("documents.delete", { id: d.id }),
+                    ),
+                  "danger",
+                ),
+              ),
+            ),
+          )
+        : empty("No documents."),
+    ),
+  );
+}
+function courseForm(course) {
+  formModal(
+    course ? "Rename course" : "Add course",
+    [field("name", "Course name", "text", course?.name)],
+    async (data, form, dialog) => {
+      const r = await command("courses.save", {
+        ...data,
+        id: course?.id,
+        yearId,
+      });
+      courseId = r.id;
+      dialog.close();
+      await refresh();
+    },
+    "Save",
+  );
+}
+function chapterForm(chapter) {
+  formModal(
+    chapter ? "Edit chapter" : "Add chapter",
+    [
+      field("name", "Chapter title", "text", chapter?.name),
+      ...(chapter
+        ? [
+            field("status", "Visibility", "select", chapter.status, pubOptions),
+            field(
+              "publishAt",
+              "Publish at (platform timezone)",
+              "datetime-local",
+              localDate(chapter.publish_at),
+            ),
+          ]
+        : []),
+    ],
+    (data, form, dialog) =>
+      saveRefresh(
+        "chapters.save",
+        { ...data, id: chapter?.id, courseId, publishAt: iso(data.publishAt) },
+        dialog,
+      ),
+  );
+}
+function documentForm(d) {
+  formModal(
+    "Edit document",
+    [
+      field("title", "Document title", "text", d.title),
+      field("status", "Visibility", "select", d.status, pubOptions),
+      field(
+        "publishAt",
+        "Publish at (platform timezone)",
+        "datetime-local",
+        localDate(d.publish_at),
+      ),
+    ],
+    (data, form, dialog) =>
+      saveRefresh(
+        "documents.save",
+        { ...data, id: d.id, publishAt: iso(data.publishAt) },
+        dialog,
+      ),
+  );
+}
+async function moveChapter(direction) {
+  const chapters = state.chapters.filter((c) => c.course_id === courseId),
+    i = chapters.findIndex((c) => c.id === chapterId),
+    j = i + direction;
+  if (j < 0 || j >= chapters.length) return;
+  [chapters[i], chapters[j]] = [chapters[j], chapters[i]];
+  await saveRefresh("chapters.reorder", {
+    courseId,
+    ids: chapters.map((c) => c.id),
+  });
+}
+function duplicateCourse(c) {
+  formModal(
+    "Copy course",
+    [
+      field("name", "Course name", "text", c.name),
+      field("yearId", "Destination year", "select", yearId, yearOptions()),
+    ],
+    (data, form, dialog) =>
+      saveRefresh("courses.duplicate", { ...data, id: c.id }, dialog),
+    "Copy",
+    "The copy starts hidden. Original files are preserved.",
+  );
+}
+function resourceUpload(parentId, category = "resource") {
+  const f = field("files", "Choose files", "file");
+  const input = f.querySelector("input");
+  input.multiple = true;
+  input.required = true;
+  if (category === "resource") input.accept = ".pdf,.pptx";
+  formModal(
+    "Upload documents",
+    [f],
+    async (data, form, dialog) => {
+      const p = el("progress", { max: 100, value: 0 });
+      form.append(p);
+      for (const file of data.files) {
+        await upload(
+          file,
+          category,
+          parentId,
+          file.name.replace(/\.[^.]+$/, "").slice(0, 160),
+          (v, t) => {
+            p.value = v;
+            dialog.querySelector(".dialog-status").textContent = t;
+          },
+        );
+      }
+      dialog.close();
+      await refresh();
+      msg("Upload saved. Publish new course documents when ready.", "success");
+    },
+    "Upload",
+    "Maximum 50 MB per file.",
+  );
+}
+function resourceList(view, data) {
+  const search = el("input", {
+      type: "search",
+      class: "search",
+      placeholder: "Search resources",
+      "aria-label": "Search resources",
+    }),
+    list = el("div");
+  view.append(search, list);
+  const draw = () => {
+    list.replaceChildren();
+    const q = search.value.toLowerCase();
+    for (const chapter of data.chapters) {
+      const docs = data.documents.filter(
+        (d) =>
+          (d.chapterId || d.chapter_id) === chapter.id &&
+          (!q || [chapter.name, d.title].join(" ").toLowerCase().includes(q)),
+      );
+      if (q && !docs.length) continue;
+      list.append(
+        panel(
+          heading(chapter.name),
+          docs.length
+            ? docs.map((d) =>
+                el(
+                  "div",
+                  { class: "resource" },
+                  el(
+                    "div",
+                    {},
+                    el("strong", {}, d.title),
+                    d.example ? badge("Example") : null,
+                    el(
+                      "div",
+                      { class: "meta" },
+                      d.file
+                        ? d.file.name.split(".").pop().toUpperCase() +
+                            " · " +
+                            size(d.file.size) +
+                            " · " +
+                            date(d.file.created)
+                        : "",
+                    ),
+                  ),
+                  actions(
+                    d.file
+                      ? button(
+                          d.file.mime === "application/pdf"
+                            ? "View PDF"
+                            : "Download",
+                          () =>
+                            openFile(
+                              d.fileId || d.file_id,
+                              d.file.name,
+                              d.file.mime,
+                            ),
+                        )
+                      : null,
+                    d.file
+                      ? button("Download", () =>
+                          downloadFile(d.fileId || d.file_id, d.file.name),
+                        )
+                      : null,
+                  ),
+                ),
+              )
+            : empty("No published documents."),
+        ),
+      );
+    }
+    if (!list.children.length)
+      list.append(
+        empty(q ? "No matching resources." : "No published chapters."),
+      );
+  };
+  search.addEventListener("input", draw);
+  draw();
+}
+function studentResources(view) {
+  resourceList(view, state);
+}
+async function downloadFile(id, name) {
+  msg("Downloading…");
+  const blob = await api(
+    "/files/" + encodeURIComponent(id),
+    "GET",
+    undefined,
+    true,
+  );
+  download(blob, name);
+  msg();
+}
+async function openFile(id, name, mime) {
+  if (mime !== "application/pdf") return downloadFile(id, name);
+  msg("Opening PDF…");
+  const blob = await api(
+      "/files/" + encodeURIComponent(id) + "?inline=1",
+      "GET",
+      undefined,
+      true,
+    ),
+    bytes = new Uint8Array(await blob.arrayBuffer());
+  const pdf = await getDocument({
+    data: bytes,
+    isEvalSupported: false,
+    stopAtErrors: true,
+    cMapUrl: new URL("./vendor/pdfjs/cmaps/", import.meta.url).href,
+    cMapPacked: true,
+    standardFontDataUrl: new URL(
+      "./vendor/pdfjs/standard_fonts/",
+      import.meta.url,
+    ).href,
+    wasmUrl: new URL("./vendor/pdfjs/wasm/", import.meta.url).href,
+  }).promise;
+  let page = 1;
+  const canvas = el("canvas"),
+    count = el("span"),
+    surface = el("div", { class: "pdf-surface" }, canvas),
+    text = el(
+      "details",
+      { class: "details" },
+      el("summary", {}, "Page text"),
+      el("p"),
+    );
+  const draw = async () => {
+    const p = await pdf.getPage(page),
+      base = p.getViewport({ scale: 1 }),
+      viewport = p.getViewport({
+        scale:
+          Math.min(1000, Math.max(240, surface.clientWidth - 32)) / base.width,
+      }),
+      scale = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = viewport.width * scale;
+    canvas.height = viewport.height * scale;
+    canvas.style.width = viewport.width + "px";
+    await p.render({
+      canvasContext: canvas.getContext("2d"),
+      viewport,
+      transform: scale === 1 ? null : [scale, 0, 0, scale, 0, 0],
+    }).promise;
+    count.textContent = "Page " + page + " / " + pdf.numPages;
+    text.querySelector("p").textContent =
+      (await p.getTextContent()).items.map((i) => i.str || "").join(" ") ||
+      "Blank page.";
+  };
+  const dialog = modal(
+    name,
+    el(
+      "div",
+      {},
+      actions(
+        button("Previous", async () => {
+          if (page > 1) {
+            page--;
+            await draw();
+          }
+        }),
+        count,
+        button("Next", async () => {
+          if (page < pdf.numPages) {
+            page++;
+            await draw();
+          }
+        }),
+        button("Download", () => download(blob, name)),
+      ),
+      surface,
+      text,
+    ),
+    true,
+  );
+  dialog.addEventListener("close", () => pdf.destroy());
+  await draw();
+  msg();
+}
+function teacherStudents(view) {
+  courseNav(view);
+  const enrollments = state.enrollments.filter((e) => e.course_id === courseId),
+    ids = new Set(enrollments.map((e) => e.student_id)),
+    students = state.students.filter((s) => ids.has(s.id));
+  const search = el("input", {
+      type: "search",
+      class: "search",
+      placeholder: "Search students",
+      "aria-label": "Search students by name or email",
+    }),
+    list = el("div");
+  const filtered = () =>
+    students.filter((s) =>
+      [s.first_name, s.last_name, s.email]
+        .join(" ")
+        .toLowerCase()
+        .includes(search.value.toLowerCase()),
+    );
+  const draw = () => {
+    const matches = filtered();
+    list.replaceChildren(
+      matches.length
+        ? table(
+            ["Name", "Email", "Access", "Actions"],
+            matches.map((s) => {
+              const e = enrollments.find((e) => e.student_id === s.id);
+              return [
+                s.first_name + " " + s.last_name,
+                s.email,
+                badge(
+                  s.active && e.status === "active" ? "active" : "inactive",
+                ),
+                actions(
+                  button(
+                    "Edit / transfer",
+                    () => studentForm(s, e),
+                    "secondary small",
+                  ),
+                  button(
+                    "New code",
+                    () =>
+                      confirmAction(
+                        "Replace student code?",
+                        "The old code and sessions will stop working. Save the new code after it appears.",
+                        () => saveRefresh("students.code", { id: e.id }),
+                      ),
+                    "secondary small",
+                  ),
+                  button(
+                    s.active ? "Deactivate" : "Activate",
+                    () =>
+                      saveRefresh("students.deactivate", {
+                        id: s.id,
+                        active: !s.active,
+                      }),
+                    "secondary small",
+                  ),
+                ),
+              ];
+            }),
+          )
+        : empty(
+            students.length
+              ? "No matching students."
+              : "No students in this course.",
+          ),
+    );
+  };
+  search.addEventListener("input", draw);
+  view.append(
+    panel(
+      heading(
+        "Students",
+        button("+ Add student", () => studentForm()),
+        button("Import CSV / XLSX", () => importStudents()),
+        button("Export XLSX", () =>
+          spreadsheet(
+            ["First name", "Last name", "Email", "Course", "Active"],
+            filtered().map((s) => [
+              s.first_name,
+              s.last_name,
+              s.email,
+              courseName(
+                enrollments.find((e) => e.student_id === s.id).course_id,
+              ),
+              s.active ? "Yes" : "No",
+            ]),
+            "students",
+          ),
+        ),
+      ),
+      search,
+      list,
+    ),
+  );
+  draw();
+}
+function studentForm(s, e) {
+  if (!courseId) {
+    msg("Add a course first.", "error");
+    return;
+  }
+  formModal(
+    s ? "Edit student" : "Add student",
+    [
+      field("firstName", "First name", "text", s?.first_name),
+      field("lastName", "Last name", "text", s?.last_name),
+      field("email", "Email", "email", s?.email),
+      field(
+        "courseId",
+        "Course",
+        "select",
+        e?.course_id || courseId,
+        courseOptions(),
+      ),
+      ...(s ? [field("active", "Active", "check", !!s.active)] : []),
+    ],
+    (data, form, dialog) =>
+      saveRefresh("students.save", { ...data, id: s?.id, yearId }, dialog),
+  );
+}
+function showCodes() {
+  if (!issuedCodes.length) return;
+  const codes = [...issuedCodes];
+  modal(
+    "Save the student codes",
+    el(
+      "div",
+      {},
+      help(
+        "Codes are shown only now. Save this file privately and give each student only their own code.",
+      ),
+      table(
+        ["Name", "Email", "Code"],
+        codes.map((s) => [
+          s.firstName + " " + s.lastName,
+          s.email,
+          el("span", { class: "code" }, s.code),
+        ]),
+      ),
+      actions(
+        button(
+          "Download XLSX",
+          () =>
+            spreadsheet(
+              ["First name", "Last name", "Email", "Student code"],
+              codes.map((s) => [s.firstName, s.lastName, s.email, s.code]),
+              "student-codes",
+            ),
+          "primary",
+        ),
+        button("Download CSV", () =>
+          csvDownload(
+            ["First name", "Last name", "Email", "Student code"],
+            codes.map((s) => [s.firstName, s.lastName, s.email, s.code]),
+            "student-codes.csv",
+          ),
+        ),
+      ),
+    ),
+    true,
+  ).addEventListener("close", () => {
+    issuedCodes = [];
+  });
+}
+function csvDownload(headers, rows, name) {
+  const cell = (v) =>
+    '"' +
+    String(v ?? "")
+      .replace(/^[=+@\-\t\r]/, "'$&")
+      .replace(/"/g, '""') +
+    '"';
+  download(
+    new Blob(
+      [
+        "\ufeff" +
+          [headers, ...rows].map((r) => r.map(cell).join(",")).join("\r\n"),
+      ],
+      { type: "text/csv;charset=utf-8" },
+    ),
+    name,
+  );
+}
+function parseCSV(text) {
+  const rows = [];
+  let row = [],
+    value = "",
+    quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      if (quoted && text[i + 1] === '"') {
+        value += '"';
+        i++;
+      } else quoted = !quoted;
+    } else if (c === "," && !quoted) {
+      row.push(value);
+      value = "";
+    } else if ((c === "\r" || c === "\n") && !quoted) {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(value);
+      if (row.some((v) => v.trim())) rows.push(row);
+      row = [];
+      value = "";
+    } else value += c;
+  }
+  if (quoted) throw new Error("Unclosed quote in CSV.");
+  row.push(value);
+  if (row.some((v) => v.trim())) rows.push(row);
+  return rows;
+}
+async function readRows(file) {
+  if (file.size > 10 * 1048576) throw new Error("Spreadsheet limit: 10 MB.");
+  if (/\.csv$/i.test(file.name))
+    return parseCSV((await file.text()).replace(/^\ufeff/, ""));
+  if (!/\.xlsx$/i.test(file.name)) throw new Error("Choose CSV or XLSX.");
+  const ExcelJS = await library("ExcelJS"),
+    book = new ExcelJS.Workbook();
+  await book.xlsx.load(await file.arrayBuffer());
+  const sheet = book.worksheets[0];
+  if (!sheet) throw new Error("The workbook is empty.");
+  if (sheet.rowCount > 2001 || sheet.columnCount > 40)
+    throw new Error("Use at most 2,000 rows and 40 columns.");
+  const rows = [];
+  sheet.eachRow((row) =>
+    rows.push(
+      Array.from(
+        { length: sheet.columnCount },
+        (_, i) => row.getCell(i + 1).text,
+      ),
+    ),
+  );
+  return rows;
+}
+function importStudents() {
+  if (!courseId) {
+    msg("Add a course first.", "error");
+    return;
+  }
+  const f = field("file", "Student list", "file");
+  f.querySelector("input").accept = ".csv,.xlsx";
+  f.querySelector("input").required = true;
+  formModal(
+    "Import students",
+    [f],
+    async (data, form, dialog) => {
+      const rows = await readRows(data.file[0]),
+        headers = rows
+          .shift()
+          .map((h) => h.toLowerCase().replace(/[\s_-]/g, ""));
+      const first = headers.findIndex((h) =>
+          ["firstname", "prénom", "prenom"].includes(h),
+        ),
+        last = headers.findIndex((h) =>
+          ["lastname", "surname", "nom"].includes(h),
+        ),
+        email = headers.findIndex((h) =>
+          ["email", "emailaddress", "courriel"].includes(h),
+        );
+      if ([first, last, email].some((i) => i < 0))
+        throw new Error("Headers required: First name, Last name, Email.");
+      importRows = rows.map((r) => ({
+        firstName: r[first] || "",
+        lastName: r[last] || "",
+        email: r[email] || "",
+      }));
+      const preview = await command("students.preview", {
+        yearId,
+        courseId,
+        rows: importRows,
+      });
+      dialog.close();
+      const body = el(
+        "div",
+        {},
+        help(
+          "Existing email addresses will be updated and enrolled in this course for " +
+            state.year.label +
+            ".",
+        ),
+        table(
+          ["Row", "First name", "Last name", "Email", "Result"],
+          preview.rows.map((r) => [
+            r.row,
+            r.firstName || "",
+            r.lastName || "",
+            r.email || "",
+            r.error || r.action,
+          ]),
+        ),
+      );
+      const d = modal("Import preview", body, true);
+      body.append(
+        button(
+          "Import " + preview.rows.length + " students",
+          async () => {
+            if (!preview.valid)
+              throw new Error("Correct the rows with errors before importing.");
+            await saveRefresh(
+              "students.import",
+              { yearId, courseId, rows: importRows },
+              d,
+            );
+            importRows = [];
+          },
+          preview.valid ? "primary" : "secondary",
+        ),
+      );
+    },
+    "Preview",
+    "CSV / XLSX · First name, Last name, Email · Up to 500 students per import.",
+  );
+}
+function teacherAnnouncements(view) {
+  view.append(
+    panel(
+      heading(
+        "Announcements",
+        button("+ New announcement", () => announcementForm()),
+      ),
+      help("Website announcements. Email delivery is off."),
+      state.announcements.length
+        ? state.announcements.map((a) =>
+            el(
+              "div",
+              { class: "resource" },
+              el(
+                "div",
+                {},
+                el("strong", {}, a.title),
+                badge(a.status),
+                help(
+                  JSON.parse(a.course_ids).map(courseName).join(", ") +
+                    " · " +
+                    a.readCount +
+                    " read",
+                ),
+              ),
+              actions(
+                button("Edit / publish", () => announcementForm(a)),
+                button("Attach file", () =>
+                  resourceUpload(a.id, "announcement"),
+                ),
+                button("Archive", () =>
+                  saveRefresh("announcements.delete", { id: a.id }),
+                ),
+              ),
+            ),
+          )
+        : empty("No announcements."),
+    ),
+  );
+}
+function announcementForm(a) {
+  const opts = [
+    { value: "draft", label: "Draft" },
+    { value: "published", label: "Published" },
+    { value: "scheduled", label: "Scheduled" },
+    { value: "archived", label: "Archived" },
+  ];
+  formModal(
+    a ? "Edit announcement" : "New announcement",
+    [
+      field("title", "Title", "text", a?.title),
+      field("body", "Message", "textarea", a?.body),
+      field(
+        "courseIds",
+        "Courses (choose one or more)",
+        "multi",
+        a ? JSON.parse(a.course_ids) : courseId ? [courseId] : [],
+        courseOptions(),
+      ),
+      field("status", "Visibility", "select", a?.status || "draft", opts),
+      field(
+        "publishAt",
+        "Publish at (platform timezone)",
+        "datetime-local",
+        localDate(a?.publish_at),
+      ),
+    ],
+    (data, form, dialog) =>
+      saveRefresh(
+        "announcements.save",
+        { ...data, id: a?.id, yearId, publishAt: iso(data.publishAt) },
+        dialog,
+      ),
+  );
+}
+function studentAnnouncements(view) {
+  if (!state.announcements.length) {
+    view.append(empty("No announcements."));
+    return;
+  }
+  for (const a of state.announcements)
+    view.append(
+      el(
+        "section",
+        { class: "panel" + (!a.read ? " unread" : "") },
+        heading(a.title, !a.read ? badge("Unread") : null),
+        help(date(a.date)),
+        el("p", {}, a.body),
+        actions(
+          a.attachments.map((id) =>
+            button("Download attachment", () => downloadFile(id, "attachment")),
+          ),
+          !a.read
+            ? button("Mark as read", () =>
+                saveRefresh("announcements.read", { id: a.id }),
+              )
+            : null,
+        ),
+      ),
+    );
+}
+function teacherAttendance(view) {
+  courseNav(view);
+  const sessions = state.attendanceSessions.filter(
+    (s) => s.course_id === courseId,
+  );
+  view.append(
+    panel(
+      heading(
+        "Attendance",
+        button("+ New session", () =>
+          formModal(
+            "New attendance session",
+            [
+              field(
+                "date",
+                "Date",
+                "date",
+                new Date().toISOString().slice(0, 10),
+              ),
+              field("time", "Time", "time"),
+              field("title", "Session title", "text"),
+            ],
+            async (data, form, dialog) => {
+              const result = await saveRefresh(
+                "attendance.create",
+                { ...data, courseId },
+                dialog,
+              );
+              await attendanceEditor(result.id);
+            },
+          ),
+        ),
+        button("Reports", attendanceReports),
+      ),
+      sessions.length
+        ? table(
+            ["Date", "Session", "Status", ""],
+            sessions.map((s) => [
+              date(s.date) + " " + s.time,
+              s.title,
+              badge(s.finalized ? "Finalized" : "Draft"),
+              button("Open roster", () => attendanceEditor(s.id)),
+            ]),
+          )
+        : empty("No attendance sessions."),
+    ),
+  );
+}
+async function attendanceEditor(id) {
+  const data = await api("/attendance/" + id),
+    controls = [];
+  const body = el("div"),
+    rows = data.students.map((s) => {
+      const record = data.records.find((r) => r.student_id === s.id);
+      const select = field(
+          "status-" + s.id,
+          "Status for " + s.first_name + " " + s.last_name,
+          "select",
+          record?.status || "",
+          [
+            { value: "", label: "Choose" },
+            ...["present", "absent", "late", "excused"].map((v) => ({
+              value: v,
+              label: v[0].toUpperCase() + v.slice(1),
+            })),
+          ],
+        ).querySelector("select"),
+        note = el("input", {
+          value: record?.note || "",
+          maxLength: 500,
+          "aria-label": "Note for " + s.first_name + " " + s.last_name,
+        });
+      controls.push({ studentId: s.id, select, note });
+      return [s.first_name + " " + s.last_name, select, note];
+    });
+  const d = modal("Attendance · " + date(data.session.date), body, true);
+  const save = async (finalized) => {
+    const records = controls
+      .filter((c) => c.select.value)
+      .map((c) => ({
+        studentId: c.studentId,
+        status: c.select.value,
+        note: c.note.value,
+      }));
+    if (finalized && records.length !== controls.length)
+      throw new Error("Mark every student before finalizing.");
+    await command("attendance.save", {
+      id,
+      revision: data.session.revision,
+      records,
+      finalized,
+    });
+    d.close();
+    await refresh();
+  };
+  body.append(
+    actions(
+      button("Mark all present", () => {
+        controls.forEach((c) => {
+          c.select.value = "present";
+        });
+      }),
+      button("Save draft", () => save(false)),
+      button("Finalize", () => save(true), "primary"),
+    ),
+    table(["Student", "Status", "Note"], rows),
+    help("Only finalized records appear to students."),
+  );
+}
+async function attendanceReports() {
+  const course = field("courseId", "Course", "select", courseId, [
+      { value: "", label: "All courses" },
+      ...courseOptions(),
+    ]),
+    from = field("from", "From", "date"),
+    to = field("to", "To", "date"),
+    result = el("div");
+  const controls = el("div", { class: "form-grid" }, course, from, to),
+    body = el("div", {}, controls);
+  const load = async () => {
+    const params = new URLSearchParams({
+      yearId,
+      courseId: course.querySelector("select").value,
+      from: from.querySelector("input").value,
+      to: to.querySelector("input").value,
+    });
+    const report = await api("/attendance-report?" + params);
+    const rows = report.summaries.map((s) => [
+      s.firstName + " " + s.lastName,
+      s.present,
+      s.absent,
+      s.late,
+      s.excused,
+      s.percentage === null ? "—" : s.percentage + "%",
+    ]);
+    result.replaceChildren(
+      actions(
+        button("Export XLSX", () =>
+          spreadsheet(
+            ["Student", "Present", "Absent", "Late", "Excused", "Attendance"],
+            rows,
+            "attendance",
+          ),
+        ),
+        button("Print / Save as PDF", () =>
+          printReport(
+            "Attendance · " + state.year.label,
+            ["Student", "Present", "Absent", "Late", "Excused", "Attendance"],
+            rows,
+          ),
+        ),
+      ),
+      table(
+        ["Student", "Present", "Absent", "Late", "Excused", "Attendance"],
+        rows,
+      ),
+      help("Percentages use finalized sessions and the policy in Settings."),
+    );
+  };
+  body.append(button("Apply filters", load), result);
+  modal("Attendance reports", body, true);
+  await load();
+}
+function printReport(title, headers, rows) {
+  const area = el(
+    "div",
+    { id: "print-report" },
+    el("h1", {}, title),
+    table(headers, rows),
+  );
+  document.body.append(area);
+  document.body.classList.add("printing");
+  window.print();
+  area.remove();
+  document.body.classList.remove("printing");
+}
+function studentAttendance(view) {
+  const report = state.attendance,
+    s = report.summaries[0];
+  if (s)
+    view.append(
+      el(
+        "div",
+        { class: "stats" },
+        [
+          ["Attendance", s.percentage === null ? "—" : s.percentage + "%"],
+          ["Absent", s.absent],
+          ["Late", s.late],
+          ["Excused", s.excused],
+        ].map(([label, value]) =>
+          el("div", { class: "stat" }, label, el("strong", {}, value)),
+        ),
+      ),
+    );
+  view.append(
+    panel(
+      heading("My attendance"),
+      report.records.length
+        ? table(
+            ["Date", "Session", "Status", "Note"],
+            report.records.map((r) => [
+              date(r.date),
+              r.title,
+              badge(r.status),
+              r.note,
+            ]),
+          )
+        : empty("No finalized attendance records."),
+    ),
+  );
+}
+function teacherAssignments(view) {
+  courseNav(view);
+  const assignments = state.assignments.filter((a) => a.course_id === courseId);
+  view.append(
+    panel(
+      heading(
+        "Assignments",
+        button("+ New assignment", () => assignmentForm()),
+      ),
+      assignments.length
+        ? assignments.map((a) =>
+            el(
+              "div",
+              { class: "resource" },
+              el(
+                "div",
+                {},
+                el("strong", {}, a.title),
+                badge(a.status),
+                help(
+                  "Deadline: " +
+                    date(a.deadline) +
+                    " · " +
+                    state.submissions.filter(
+                      (s) =>
+                        s.assignment_id === a.id &&
+                        state.submissionFiles.some(
+                          (f) => f.submission_id === s.id,
+                        ),
+                    ).length +
+                    " submissions",
+                ),
+              ),
+              actions(
+                button("Edit", () => assignmentForm(a)),
+                button("Submissions", () => submissionsView(a)),
+                button("Extension", () => extensionForm(a, "assignment")),
+              ),
+            ),
+          )
+        : empty("No assignments."),
+    ),
+  );
+}
+function assignmentForm(a) {
+  if (!courseId) {
+    msg("Add a course first.", "error");
+    return;
+  }
+  formModal(
+    a ? "Edit assignment" : "New assignment",
+    [
+      field("title", "Title", "text", a?.title),
+      field("body", "Instructions", "textarea", a?.body),
+      field(
+        "deadline",
+        "Deadline (platform timezone)",
+        "datetime-local",
+        localDate(a?.deadline),
+      ),
+      field("status", "Visibility", "select", a?.status || "draft", [
+        { value: "draft", label: "Draft" },
+        { value: "published", label: "Published" },
+        { value: "closed", label: "Closed" },
+      ]),
+      el(
+        "div",
+        { class: "form-grid" },
+        field(
+          "maxFileMB",
+          "Maximum MB per file",
+          "number",
+          a ? a.max_file_bytes / 1048576 : 10,
+        ),
+        field(
+          "maxTotalMB",
+          "Maximum MB per submission",
+          "number",
+          a ? a.max_total_bytes / 1048576 : 50,
+        ),
+      ),
+      field("allowLate", "Allow late work", "check", !!a?.allow_late),
+      field(
+        "allowReplace",
+        "Allow replacing / removing files",
+        "check",
+        a ? !!a.allow_replace : true,
+      ),
+      field("groups", "Allow group submissions", "check", !!a?.groups),
+    ],
+    (data, form, dialog) =>
+      saveRefresh(
+        "assignments.save",
+        {
+          ...data,
+          id: a?.id,
+          courseId,
+          deadline: iso(data.deadline),
+          maxFileBytes: Number(data.maxFileMB) * 1048576,
+          maxTotalBytes: Number(data.maxTotalMB) * 1048576,
+        },
+        dialog,
+      ),
+  );
+}
+function submissionsView(a) {
+  const list = state.submissions.filter((s) => s.assignment_id === a.id),
+    allFiles = state.submissionFiles.filter(
+      (f) => list.some((s) => s.id === f.submission_id) && f.file,
+    );
+  const body = el(
+    "div",
+    {},
+    actions(
+      button("Download ZIP", () => bulkZIP(a, allFiles)),
+      button("Export grades XLSX", () =>
+        spreadsheet(
+          ["Student / group owner", "Submitted", "Late", "Grade", "Feedback"],
+          list.map((s) => [
+            enrollmentName(s.enrollment_id),
+            s.submitted_at,
+            s.late ? "Yes" : "No",
+            s.grade,
+            s.feedback,
+          ]),
+          a.title + "-grades",
+        ),
+      ),
+    ),
+    help(
+      "ZIP download limit: 100 MB at a time. Larger files can be downloaded individually.",
+    ),
+  );
+  const rows = list
+    .filter((s) => allFiles.some((f) => f.submission_id === s.id))
+    .map((s) => [
+      enrollmentName(s.enrollment_id) + (s.group_id ? " (group)" : ""),
+      date(s.submitted_at) + (s.late ? " · Late" : ""),
+      el(
+        "div",
+        { class: "list" },
+        allFiles
+          .filter((f) => f.submission_id === s.id)
+          .map((f) =>
+            button(
+              f.file.name,
+              () => openFile(f.file_id, f.file.name, f.file.mime),
+              "secondary small",
+            ),
+          ),
+      ),
+      s.grade || "—",
+      button("Feedback / grade", () =>
+        formModal(
+          "Feedback",
+          [
+            field("grade", "Grade", "text", s.grade),
+            field("feedback", "Feedback", "textarea", s.feedback),
+            field(
+              "retentionExempt",
+              "Keep files when this year is cleaned up",
+              "check",
+              !!s.retention_exempt,
+            ),
+          ],
+          async (data, form, dialog) => {
+            await saveRefresh(
+              "submissions.feedback",
+              { ...data, id: s.id },
+              dialog,
+            );
+            d.close();
+            submissionsView(state.assignments.find((x) => x.id === a.id));
+          },
+        ),
+      ),
+    ]);
+  body.append(
+    rows.length
+      ? table(["Student", "Submitted", "Files", "Grade", ""], rows)
+      : empty("No submitted files."),
+  );
+  const submittedIds = new Set(
+    list
+      .filter((s) => allFiles.some((f) => f.submission_id === s.id))
+      .flatMap((s) => [s.enrollment_id, ...JSON.parse(s.member_ids || "[]")]),
+  );
+  const missing = state.enrollments.filter(
+    (e) =>
+      e.course_id === a.course_id &&
+      e.status === "active" &&
+      !submittedIds.has(e.id) &&
+      state.students.find((s) => s.id === e.student_id)?.active,
+  );
+  if (missing.length)
+    body.append(
+      el("h3", {}, "Not submitted"),
+      table(
+        ["Student"],
+        missing.map((e) => [enrollmentName(e.id)]),
+      ),
+    );
+  const d = modal(a.title + " · Submissions", body, true);
+}
+async function bulkZIP(a, files) {
+  const total = files.reduce((s, f) => s + f.file.size, 0);
+  if (!files.length) throw new Error("No submitted files.");
+  if (total > 100 * 1048576)
+    throw new Error("This ZIP exceeds 100 MB. Download files individually.");
+  const JSZip = await library("JSZip"),
+    zip = new JSZip();
+  for (const [i, f] of files.entries()) {
+    msg("Downloading " + (i + 1) + " / " + files.length + "…");
+    const s = state.submissions.find((s) => s.id === f.submission_id),
+      folder =
+        enrollmentName(s.enrollment_id).replace(/[^a-zA-Z0-9 _-]/g, "_") +
+        "-" +
+        s.id.slice(0, 8);
+    zip.file(
+      folder + "/" + f.file.id.slice(0, 8) + "-" + f.file.name,
+      await api("/files/" + f.file_id, "GET", undefined, true),
+    );
+  }
+  download(
+    await zip.generateAsync({ type: "blob", compression: "STORE" }),
+    a.title.replace(/[\\/]/g, "_") + ".zip",
+  );
+  msg();
+}
+function extensionForm(parent, kind) {
+  const options = state.enrollments
+    .filter((e) => e.course_id === parent.course_id)
+    .map((e) => ({ value: e.id, label: enrollmentName(e.id) }));
+  formModal(
+    "Student deadline extension",
+    [
+      field("enrollmentId", "Student", "select", "", options),
+      field("closesAt", "New deadline (platform timezone)", "datetime-local"),
+    ],
+    (data, form, dialog) =>
+      saveRefresh(
+        "exceptions.save",
+        { ...data, parentId: parent.id, kind, closesAt: iso(data.closesAt) },
+        dialog,
+      ),
+  );
+}
+function groupControls(parentId, kind, group, hasEntry = false) {
+  if (group) return help("Group connected · " + group.members + " members");
+  if (hasEntry) return help("Individual submission");
+  return actions(
+    button("Create group", async () => {
+      const r = await command("groups.create", { parentId, kind });
+      modal(
+        "Group invitation",
+        el(
+          "div",
+          {},
+          help(
+            "Give this invitation code only to your group members. It is separate from your student sign-in code.",
+          ),
+          el("p", { class: "code" }, r.invitationCode),
+        ),
+      );
+      await refresh();
+    }),
+    button("Join group", () =>
+      formModal(
+        "Join group",
+        [field("code", "Group invitation code", "text")],
+        (data, form, dialog) =>
+          saveRefresh("groups.join", { ...data, parentId, kind }, dialog),
+      ),
+    ),
+  );
+}
+function studentAssignments(view) {
+  if (!state.assignments.length) {
+    view.append(empty("No assignments."));
+    return;
+  }
+  for (const a of state.assignments) {
+    const s = state.submissions.find((s) => s.assignmentId === a.id),
+      files = s?.files || [];
+    view.append(
+      panel(
+        heading(a.title, badge(a.status)),
+        el("p", {}, a.body),
+        help(
+          "Deadline: " +
+            date(a.deadline) +
+            " · " +
+            size(a.maxFileBytes) +
+            " per file · " +
+            size(a.maxTotalBytes) +
+            " total" +
+            (a.allowLate ? " · Late work accepted" : ""),
+        ),
+        a.groups ? groupControls(a.id, "assignment", a.group, !!s) : null,
+        files.length
+          ? el(
+              "div",
+              { class: "list" },
+              files.map((f) =>
+                el(
+                  "div",
+                  { class: "resource" },
+                  el("div", {}, el("strong", {}, f.name), help(size(f.size))),
+                  actions(
+                    button("View", () => openFile(f.id, f.name, f.mime)),
+                    a.allowReplace && a.status === "published"
+                      ? button(
+                          "Remove",
+                          () =>
+                            confirmAction(
+                              "Remove submitted file?",
+                              "This file will be deleted from storage.",
+                              () => saveRefresh("files.remove", { id: f.id }),
+                            ),
+                          "danger",
+                        )
+                      : null,
+                  ),
+                ),
+              ),
+            )
+          : help("No files submitted."),
+        a.status === "published"
+          ? button("+ Submit files", () => submissionUpload(a), "primary")
+          : null,
+        s?.feedback || s?.grade
+          ? el(
+              "div",
+              { class: "notice" },
+              s.grade ? el("strong", {}, "Grade: " + s.grade) : null,
+              el("p", {}, s.feedback),
+            )
+          : null,
+      ),
+    );
+  }
+}
+function submissionUpload(a) {
+  const f = field("files", "Choose files", "file");
+  f.querySelector("input").multiple = true;
+  f.querySelector("input").required = true;
+  formModal(
+    "Submit · " + a.title,
+    [f],
+    async (data, form, dialog) => {
+      const p = el("progress", { max: 100, value: 0 });
+      form.append(p);
+      for (const file of data.files)
+        await upload(file, "submission", a.id, null, (v, t) => {
+          p.value = v;
+          dialog.querySelector(".dialog-status").textContent = t;
+        });
+      dialog.close();
+      await refresh();
+      msg("Files submitted.", "success");
+    },
+    "Submit",
+    "Documents, archives, images, and source code · Maximum " +
+      size(a.maxFileBytes) +
+      " per file / " +
+      size(a.maxTotalBytes) +
+      " total. Files are visible only to you, your group if applicable, and your teacher.",
+  );
+}
+function teacherProjects(view) {
+  courseNav(view);
+  const sheets = state.sheets.filter((s) => s.course_id === courseId);
+  view.append(
+    panel(
+      heading(
+        "Project sheets",
+        button("+ Create template", () => templateEditor()),
+        button("Import XLSX / CSV", () => templateImport()),
+        button("Assign template", () => assignTemplate()),
+      ),
+      sheets.length
+        ? sheets.map((s) =>
+            el(
+              "div",
+              { class: "resource" },
+              el(
+                "div",
+                {},
+                el("strong", {}, s.title),
+                badge(s.status),
+                help("Closes: " + date(s.closes_at)),
+              ),
+              actions(
+                button("Open table", () => openSheet(s.id)),
+                button("Publish / dates", () => sheetForm(s)),
+                button("Extension", () => extensionForm(s, "sheet")),
+              ),
+            ),
+          )
+        : empty("Assign a template to create a project sheet."),
+    ),
+  );
+  view.append(
+    panel(
+      heading("Templates"),
+      state.templates.length
+        ? table(
+            ["Template", "Version", ""],
+            state.templates.map((t) => [
+              t.title,
+              t.version,
+              actions(
+                button("Edit columns", () => templateEditor(t)),
+                t.original_file_id
+                  ? button("Original file", () =>
+                      downloadFile(t.original_file_id, t.title + ".xlsx"),
+                    )
+                  : null,
+              ),
+            ]),
+          )
+        : empty("No templates."),
+    ),
+  );
+}
+function templateEditor(template, initialColumns, originalFile) {
+  const rows = [],
+    list = el("div");
+  const body = el("form"),
+    title = field(
+      "title",
+      "Template title",
+      "text",
+      template?.title || originalFile?.name.replace(/\.[^.]+$/, "") || "",
+    );
+  body.append(title);
+  const add = (definition = {}) => {
+    const controls = {
+      id: definition.id || "col_" + crypto.randomUUID().replaceAll("-", ""),
+      label: field("label", "Column name", "text", definition.label || ""),
+      type: field(
+        "type",
+        "Type",
+        "select",
+        definition.type || "text",
+        ["text", "number", "date", "select"].map((v) => ({
+          value: v,
+          label: v,
+        })),
+      ),
+      protected: field(
+        "protected",
+        "Teacher edits only",
+        "check",
+        definition.protected,
+      ),
+      teacherOnly: field(
+        "teacherOnly",
+        "Visible only to teacher",
+        "check",
+        definition.teacherOnly,
+      ),
+      options: field(
+        "options",
+        "Choices, separated by commas",
+        "text",
+        (definition.options || []).join(", "),
+      ),
+    };
+    const card = panel(
+      el(
+        "div",
+        { class: "form-grid" },
+        controls.label,
+        controls.type,
+        controls.protected,
+        controls.teacherOnly,
+      ),
+      controls.options,
+    );
+    card.append(
+      button(
+        "Remove column",
+        () => {
+          rows.splice(rows.indexOf(controls), 1);
+          card.remove();
+        },
+        "danger small",
+      ),
+    );
+    rows.push(controls);
+    list.append(card);
+  };
+  (template
+    ? JSON.parse(template.columns_json)
+    : initialColumns || [
+        { id: "student_name", label: "Student name", protected: true },
+        { id: "topic", label: "Project topic" },
+        { id: "description", label: "Description" },
+      ]
+  ).forEach(add);
+  body.append(
+    list,
+    actions(
+      button("+ Add column", () => add()),
+      el("button", { type: "submit", class: "button" }, "Save template"),
+    ),
+  );
+  const d = modal(template ? "Edit template" : "Create template", body, true);
+  body.addEventListener("submit", (e) => {
+    e.preventDefault();
+    run(async () => {
+      const columns = rows.map((r) => ({
+        id: r.id,
+        label: r.label.querySelector("input").value,
+        type: r.type.querySelector("select").value,
+        protected: r.protected.querySelector("input").checked,
+        teacherOnly: r.teacherOnly.querySelector("input").checked,
+        options: r.options
+          .querySelector("input")
+          .value.split(",")
+          .map((v) => v.trim())
+          .filter(Boolean),
+      }));
+      const result = await command("templates.save", {
+        id: template?.id,
+        title: title.querySelector("input").value,
+        columns,
+      });
+      if (originalFile) {
+        await upload(originalFile, "template", result.id, null, (v, t) => {
+          d.querySelector(".dialog-status").textContent = t + " " + v + "%";
+        });
+      }
+      d.close();
+      await refresh();
+      msg("Template saved. Existing sheets keep their own columns.", "success");
+    });
+  });
+}
+function templateImport() {
+  const f = field("file", "Template file", "file");
+  f.querySelector("input").accept = ".xlsx,.csv";
+  f.querySelector("input").required = true;
+  formModal(
+    "Import template",
+    [f],
+    async (data, form, dialog) => {
+      const file = data.file[0],
+        rows = await readRows(file);
+      const headers = rows[0]?.filter(Boolean);
+      if (!headers?.length)
+        throw new Error("Add column names to the first row.");
+      const defs = headers.map((label, i) => ({
+        id: "column_" + i,
+        label: String(label),
+      }));
+      dialog.close();
+      templateEditor(null, defs, file);
+    },
+    "Preview columns",
+    "The first row supplies column names. Formulas and macros are not imported. The original file is preserved privately.",
+  );
+}
+function assignTemplate() {
+  formModal(
+    "Assign template",
+    [
+      field(
+        "templateId",
+        "Template",
+        "select",
+        "",
+        state.templates.map((t) => ({ value: t.id, label: t.title })),
+      ),
+      field(
+        "courseIds",
+        "Courses (choose one or more)",
+        "multi",
+        courseId ? [courseId] : [],
+        courseOptions(),
+      ),
+    ],
+    (data, form, dialog) =>
+      saveRefresh("sheets.assign", { ...data, yearId }, dialog),
+    "Assign",
+    "Each course and year receives an independent copy, initially hidden.",
+  );
+}
+function sheetForm(s) {
+  formModal(
+    "Project sheet settings",
+    [
+      field("title", "Title", "text", s.title),
+      field("status", "Visibility", "select", s.status, [
+        { value: "hidden", label: "Hidden" },
+        { value: "published", label: "Published" },
+      ]),
+      field(
+        "opensAt",
+        "Editing opens (platform timezone)",
+        "datetime-local",
+        localDate(s.opens_at),
+      ),
+      field(
+        "closesAt",
+        "Editing closes (platform timezone)",
+        "datetime-local",
+        localDate(s.closes_at),
+      ),
+    ],
+    (data, form, dialog) =>
+      saveRefresh(
+        "sheets.save",
+        {
+          ...data,
+          id: s.id,
+          opensAt: iso(data.opensAt),
+          closesAt: iso(data.closesAt),
+        },
+        dialog,
+      ),
+  );
+}
+async function openSheet(id) {
+  const data = await api("/sheets/" + id),
+    body = el("div"),
+    columns = data.sheet.columns;
+  const redraw = async () => {
+    dialog.close();
+    await openSheet(id);
+  };
+  const entries = data.entries;
+  const controls = teacher
+    ? actions(
+        button("+ Add row", () => entryForm(null)),
+        button("Export XLSX", () =>
+          spreadsheet(
+            ["Student / group owner", ...columns.map((c) => c.label)],
+            entries
+              .filter((e) => !e.deleted)
+              .map((e) => [
+                e.ownerName,
+                ...columns.map((c) => e.values[c.id] || ""),
+              ]),
+            data.sheet.title,
+          ),
+        ),
+      )
+    : el(
+        "div",
+        {},
+        groupControls(
+          id,
+          "sheet",
+          data.group,
+          entries.some((e) => e.canEdit),
+        ),
+        data.canEdit && !entries.some((e) => e.canEdit)
+          ? button("+ Add my project", () => entryForm(null), "primary")
+          : null,
+      );
+  body.append(
+    help("Editing closes: " + date(data.sheet.closes_at)),
+    controls,
+    entries.length
+      ? table(
+          ["Student / group owner", ...columns.map((c) => c.label), "Actions"],
+          entries.map((e) => [
+            e.ownerName + (e.deleted ? " · Removed" : ""),
+            ...columns.map((c) =>
+              el("div", { class: "sheet-cell" }, e.values[c.id] || ""),
+            ),
+            actions(
+              (teacher || (data.canEdit && e.canEdit)) && !e.deleted
+                ? button("Edit", () => entryForm(e), "secondary small")
+                : null,
+              (teacher || (data.canEdit && e.canEdit)) && !e.deleted
+                ? button(
+                    "Remove",
+                    () =>
+                      confirmAction(
+                        "Remove project row?",
+                        "The revision history is kept for your teacher.",
+                        async () => {
+                          await command("projects.delete", {
+                            id: e.id,
+                            sheetId: id,
+                            revision: e.revision,
+                          });
+                          await redraw();
+                        },
+                      ),
+                    "danger small",
+                  )
+                : null,
+              teacher
+                ? button(
+                    "History / restore",
+                    () => historyView(e),
+                    "secondary small",
+                  )
+                : null,
+            ),
+          ]),
+        )
+      : empty("No projects entered."),
+  );
+  const dialog = modal(data.sheet.title, body, true);
+  function entryForm(entry) {
+    const defs = columns.filter(
+        (c) => teacher || (!c.protected && !c.teacherOnly),
+      ),
+      fields = defs.map((c) =>
+        field(
+          c.id,
+          c.label,
+          c.type === "select"
+            ? "select"
+            : c.type === "number"
+              ? "number"
+              : c.type === "date"
+                ? "date"
+                : "textarea",
+          entry?.values[c.id] || "",
+          c.options.map((v) => ({ value: v, label: v })),
+        ),
+      );
+    if (teacher && !entry)
+      fields.unshift(
+        field(
+          "enrollmentId",
+          "Student / group owner",
+          "select",
+          "",
+          state.enrollments
+            .filter((e) => e.course_id === data.sheet.course_id)
+            .map((e) => ({ value: e.id, label: enrollmentName(e.id) })),
+        ),
+      );
+    formModal("Project row", fields, async (values, form, d) => {
+      await command("projects.save", {
+        id: entry?.id,
+        sheetId: id,
+        revision: entry?.revision,
+        enrollmentId: values.enrollmentId,
+        values,
+      });
+      d.close();
+      await redraw();
+    });
+  }
+  async function historyView(entry) {
+    const h = await api("/project-history/" + entry.id);
+    const d = modal(
+      "Revision history",
+      table(
+        ["Revision", "Saved", "Changes", ""],
+        h.history.map((r) => [
+          r.revision,
+          date(r.created),
+          el(
+            "div",
+            {},
+            Object.entries(JSON.parse(r.after_json).values).map(
+              ([key, value]) =>
+                el(
+                  "p",
+                  {},
+                  (columns.find((c) => c.id === key)?.label || key) +
+                    ": " +
+                    value,
+                ),
+            ),
+          ),
+          button("Restore", async () => {
+            await command("projects.restore", {
+              id: entry.id,
+              sheetId: id,
+              revision: entry.revision,
+              historyId: r.id,
+            });
+            d.close();
+            await redraw();
+          }),
+        ]),
+      ),
+      true,
+    );
+  }
+}
+function studentProjects(view) {
+  view.append(
+    ...(state.sheets.length
+      ? state.sheets.map((s) =>
+          panel(
+            heading(
+              s.title,
+              button("Open project table", () => openSheet(s.id), "primary"),
+            ),
+            help("Closes: " + date(s.closesAt)),
+          ),
+        )
+      : [empty("No project sheets.")]),
+  );
+}
+async function teacherSettings(view) {
+  const storage = panel(
+    heading("File storage"),
+    help("Loading Google Drive status…"),
+  );
+  view.append(storage);
+  const policy = panel(
+    heading("Attendance policy"),
+    button("Edit policy", () =>
+      formModal(
+        "Attendance policy",
+        [
+          field("timezone", "Timezone", "text", state.settings.timezone),
+          field(
+            "lateWeight",
+            "Late arrival counts as",
+            "select",
+            String(state.settings.lateWeight),
+            [
+              { value: "1", label: "Present (100%)" },
+              { value: "0.5", label: "Half (50%)" },
+              { value: "0", label: "Absent (0%)" },
+            ],
+          ),
+          field(
+            "excused",
+            "Excused absence",
+            "select",
+            state.settings.excused,
+            [
+              { value: "exclude", label: "Exclude from calculation" },
+              { value: "present", label: "Count as present" },
+              { value: "absent", label: "Count as absent" },
+            ],
+          ),
+        ],
+        (data, form, d) => saveRefresh("settings.save", data, d),
+      ),
+    ),
+    help(
+      "Late: " +
+        state.settings.lateWeight * 100 +
+        "% · Excused: " +
+        state.settings.excused +
+        " · " +
+        state.settings.timezone,
+    ),
+  );
+  view.append(
+    policy,
+    panel(
+      heading(
+        "Academic years",
+        button("+ Add year", () =>
+          formModal(
+            "Academic year",
+            [
+              field("label", "Year label", "text"),
+              field("starts", "Start date", "date"),
+            ],
+            (data, form, d) => saveRefresh("years.save", data, d),
+          ),
+        ),
+      ),
+      table(
+        ["Year", "Starts", "Status", ""],
+        state.years.map((y) => [
+          y.label,
+          date(y.starts),
+          badge(y.active ? "active" : "archived"),
+          !y.active
+            ? button("Make active", () =>
+                confirmAction(
+                  "Activate " + y.label + "?",
+                  "Students from other years will lose access. Historical records are preserved.",
+                  () => saveRefresh("years.activate", { id: y.id }),
+                ),
+              )
+            : null,
+        ]),
+      ),
+    ),
+    panel(
+      heading(
+        "Private export",
+        button("Export database JSON", async () =>
+          jsonDownload(
+            await api("/export"),
+            "tasnim-classroom-private-export.json",
+          ),
+        ),
+      ),
+      help(
+        "Contains private student records and access-code hashes. Keep this download private. Files are downloaded separately.",
+      ),
+    ),
+    panel(
+      heading("Website announcements"),
+      help(
+        "Email delivery is off. Annual code renewal and automatic file deletion are deferred.",
+      ),
+    ),
+  );
+  try {
+    const connection = await api("/storage");
+    if (!storage.isConnected) return;
+    const ownerSetup = () =>
+      formModal(
+        "Google Drive app setup",
+        [
+          field(
+            "clientId",
+            "Google OAuth client ID",
+            "text",
+            connection.clientId,
+          ),
+          field("clientSecret", "Client secret", "password"),
+        ],
+        async (data, form, d) => {
+          await api("/storage/google-drive/configure", "POST", data);
+          form.querySelector("input[type=password]").value = "";
+          d.close();
+          await refresh();
+        },
+        "Save securely",
+        "Owner setup only. Credentials are encrypted on the server.",
+      );
+    const ownerDetails = el(
+      "details",
+      { class: "details" },
+      el("summary", {}, "Owner connection settings"),
+      button("Owner app setup", ownerSetup),
+      help(
+        "OAuth callback: https://tasnim-classroom-service.chamseddine.chatgpt.site/api/lms/storage/google-drive/callback",
+      ),
+    );
+    storage.replaceChildren(
+      heading("File storage"),
+      badge(connection.connected ? "Connected" : "Not connected"),
+      help("Google Drive · Private classroom files"),
+      connection.quota
+        ? help(
+            "Drive usage: " +
+              size(Number(connection.quota.usage || 0)) +
+              (connection.quota.limit
+                ? " / " + size(Number(connection.quota.limit))
+                : ""),
+          )
+        : el("span"),
+      actions(
+        button(
+          connection.connected
+            ? "Reconnect Google Drive"
+            : "Connect Google Drive",
+          async () => {
+            const result = await api("/storage/google-drive/start", "POST", {});
+            location.assign(result.url);
+          },
+          "primary",
+        ),
+        button("Test connection", async () => {
+          const check = await api("/storage/test", "POST", {});
+          if (!check.verified) throw new Error("Storage verification failed.");
+          msg("Storage upload and download verified.", "success");
+        }),
+      ),
+      ownerDetails,
+    );
+  } catch (e) {
+    storage.replaceChildren(heading("File storage"), help(e.message));
+  }
 }
 login();
