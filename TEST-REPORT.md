@@ -4,7 +4,7 @@ Checked 30 October 2026.
 
 - Students: https://tasnim-hamdeni.github.io/
 - Teacher: https://tasnim-hamdeni.github.io/tasnim/
-- Application source commit: 8d631547996bf4dacb46b7877e693a620e0dd7dc
+- Application source baseline: 8d631547996bf4dacb46b7877e693a620e0dd7dc; the final source ZIP also includes readable GB/TB storage-quota units.
 - GitHub Pages build: 41036989944, succeeded.
 - Backend source: 0ff85924d5609f5390c65e23e113d000a76debb7
 - Backend deployment: appgdep_6ae467913c9881919a5b8ecd2f92d3c6, succeeded.

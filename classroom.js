@@ -88,10 +88,11 @@ const panel = (...items) => el("section", { class: "panel" }, ...items);
 const heading = (title, ...items) =>
   el("div", { class: "heading" }, el("h2", {}, title), actions(items));
 const help = (text) => el("p", { class: "help" }, text);
-const size = (value) =>
-  value < 1048576
-    ? Math.ceil(value / 1024) + " KB"
-    : (value / 1048576).toFixed(1) + " MB";
+const size = (value) => {
+  if (value < 1048576) return Math.ceil(value / 1024) + " KB";
+  const unit = Math.min(4, Math.floor(Math.log(value) / Math.log(1024)));
+  return (value / 1024 ** unit).toFixed(1) + " " + ["B", "KB", "MB", "GB", "TB"][unit];
+};
 const timezone = () =>
   state?.settings?.timezone || state?.timezone || "Africa/Lagos";
 const date = (value) =>

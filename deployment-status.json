@@ -4,7 +4,6 @@
   "publishedURL": "https://tasnim-hamdeni.github.io/",
   "adminURL": "https://tasnim-hamdeni.github.io/tasnim/",
   "websiteRepository": "tasnim-hamdeni/tasnim-hamdeni.github.io",
-  "applicationCommit": "8d631547996bf4dacb46b7877e693a620e0dd7dc",
   "pagesActionsRun": 41036989944,
   "dataRepository": "tasnim-hamdeni/tasnim-lesson-data",
   "dataCommit": "e8e2c6278700d07b36aa3f364f938a9712942e56",
@@ -44,5 +43,7 @@
     "PHP/MySQL hosting"
   ],
   "remainingOwnerTechnicalAction": null,
-  "nextTeachingStep": "Add/import students, save their newly generated codes privately, and publish course resources."
+  "nextTeachingStep": "Add/import students, save their newly generated codes privately, and publish course resources.",
+  "applicationBaselineCommit": "8d631547996bf4dacb46b7877e693a620e0dd7dc",
+  "lastDisplayAdjustment": "Readable GB/TB storage quota units."
 }
