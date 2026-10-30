@@ -1,0 +1,48 @@
+{
+  "owner": "tasnim-hamdeni",
+  "status": "published-and-browser-verified",
+  "publishedURL": "https://tasnim-hamdeni.github.io/",
+  "adminURL": "https://tasnim-hamdeni.github.io/tasnim/",
+  "websiteRepository": "tasnim-hamdeni/tasnim-hamdeni.github.io",
+  "applicationCommit": "8d631547996bf4dacb46b7877e693a620e0dd7dc",
+  "pagesActionsRun": 41036989944,
+  "dataRepository": "tasnim-hamdeni/tasnim-lesson-data",
+  "dataCommit": "e8e2c6278700d07b36aa3f364f938a9712942e56",
+  "serviceURL": "https://tasnim-classroom-service.chamseddine.chatgpt.site",
+  "serviceProjectId": "appgprj_6adfc4042d208191a3dc6e62b114910c",
+  "serviceSourceCommit": "0ff85924d5609f5390c65e23e113d000a76debb7",
+  "serviceDeploymentId": "appgdep_6ae467913c9881919a5b8ecd2f92d3c6",
+  "serviceDeploymentStatus": "succeeded",
+  "checkedOn": "2026-10-30",
+  "storage": {
+    "provider": "google-drive",
+    "connected": true,
+    "scope": "drive.file",
+    "liveUploadDownloadCleanupVerified": true,
+    "privateRecords": "D1"
+  },
+  "verification": {
+    "frontendTests": 31,
+    "backendTests": 16,
+    "runtimeFilesMatchSource": 21,
+    "preservedCourses": 3,
+    "preservedChapters": 10,
+    "preservedDocuments": 19,
+    "liveTeacherSignIn": true,
+    "livePdfReader": true,
+    "isolatedStudentProjectSave": true,
+    "studentImportRowsTested": 500,
+    "sharedSheetRowsTested": 200,
+    "simultaneousProductionLoadTested": false
+  },
+  "deferred": [
+    "Email delivery",
+    "Automatic annual code renewal/template copying/deletion/reminders",
+    "Daily backups",
+    "Complex Excel features",
+    "Multi-teacher signup",
+    "PHP/MySQL hosting"
+  ],
+  "remainingOwnerTechnicalAction": null,
+  "nextTeachingStep": "Add/import students, save their newly generated codes privately, and publish course resources."
+}
