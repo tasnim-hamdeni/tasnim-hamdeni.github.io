@@ -1,15 +1,19 @@
 import { config } from "./config.js";
 import { validateFile } from "./core.js";
 let session = null;
+let activeCourse = null;
 const base =
   location.hostname === "localhost" || location.hostname === "127.0.0.1"
     ? location.origin + "/api/lms"
     : config.adminService + "/api/lms";
 export const clearSession = () => {
   session = null;
+  activeCourse = null;
 };
-export async function api(path, method = "GET", data, binary = false) {
+export const selectCourse = (course) => { activeCourse = course; };
+export async function api(path, method = "GET", data, binary = false, course = activeCourse, timeout = binary ? 180000 : 45000) {
   const headers = session ? { Authorization: "Bearer " + session } : {};
+  if (course) headers["X-Classroom-Course"] = course;
   if (data !== undefined) headers["Content-Type"] = "application/json";
   let r;
   try {
@@ -20,7 +24,7 @@ export async function api(path, method = "GET", data, binary = false) {
       credentials: "omit",
       referrerPolicy: "no-referrer",
       cache: "no-store",
-      signal: AbortSignal.timeout(binary ? 180000 : 45000),
+      signal: AbortSignal.timeout(timeout),
     });
   } catch {
     throw new Error(
@@ -42,26 +46,37 @@ export async function signIn(role, code) {
     teacher: "tasnim",
   });
   session = result.session;
+  activeCourse = null;
+  return result;
+}
+export async function verifyEmailSignIn(data) {
+  const result = await api("/identity/verify", "POST", data, false, null);
+  session = result.session;
+  activeCourse = null;
   return result;
 }
 export async function signOut() {
   try {
-    await api("/session", "DELETE");
+    await api("/session", "DELETE", undefined, false, null);
   } finally {
     clearSession();
   }
 }
 export const command = (action, data = {}) =>
-  api("/command", "POST", { action, ...data });
+  api("/command", "POST", { action, ...data }, false, undefined,
+    action === "courses.copyContinue" ? 360000 : undefined);
 export async function upload(file, category, parentId, title, progress) {
+  const course = activeCourse;
+  const token = session;
   if (category === "resource") await validateFile(file);
+  if (session !== token) throw new Error("Your sign-in changed. Start the upload again.");
   const intent = await api("/uploads", "POST", {
     name: file.name,
     mime: file.type,
     size: file.size,
     category,
     parentId,
-  });
+  }, false, course);
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(
@@ -71,7 +86,8 @@ export async function upload(file, category, parentId, title, progress) {
         encodeURIComponent(intent.id) +
         (title ? "?title=" + encodeURIComponent(title) : ""),
     );
-    xhr.setRequestHeader("Authorization", "Bearer " + session);
+    xhr.setRequestHeader("Authorization", "Bearer " + token);
+    if (course) xhr.setRequestHeader("X-Classroom-Course", course);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.timeout = 240000;
     xhr.upload.onprogress = (e) =>

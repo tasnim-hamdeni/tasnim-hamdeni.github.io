@@ -3,6 +3,8 @@ import {
   signIn,
   signOut,
   clearSession,
+  selectCourse,
+  verifyEmailSignIn,
   command,
   upload,
 } from "./classroom-api.js";
@@ -19,6 +21,21 @@ const teacher = document.body.dataset.role === "teacher",
   status = document.getElementById("status"),
   sessionActions = document.getElementById("session-actions");
 let authEpoch = 0;
+let refreshId = 0;
+let openedNotification;
+let assistantChat;
+const notificationTabs = {
+  announcement: "announcements", chapter: "resources", document: "resources",
+  assignment: "assignments", project: "projects", question: "questions",
+};
+function notificationLink() {
+  const parts = location.hash.match(/^#open\/([a-z0-9_-]{1,128})\/(announcement|chapter|document|assignment|project|question)\/([a-z0-9_-]{1,128})$/i);
+  return parts && { course: parts[1], kind: parts[2].toLowerCase(), item: parts[3], hash: parts[0] };
+}
+const notificationAnchor = (kind, id) => ({ id: "item-" + kind + "-" + id, tabIndex: -1 });
+function linkedPanel(kind, id, ...items) {
+  return el("section", { class: "panel", ...notificationAnchor(kind, id) }, ...items);
+}
 let state,
   tab = teacher ? "courses" : "resources",
   courseId,
@@ -103,7 +120,7 @@ const date = (value) =>
   value
     ? new Intl.DateTimeFormat("en-GB", {
         dateStyle: "medium",
-        timeZone: timezone(),
+        timeZone: /^\d{4}-\d{2}-\d{2}$/.test(value) ? "UTC" : timezone(),
         ...(value.includes("T") ? { timeStyle: "short" } : {}),
       }).format(new Date(value))
     : "—";
@@ -373,6 +390,8 @@ function login() {
     brand.href = "./";
   }
   authEpoch++;
+  openedNotification = undefined;
+  assistantChat = undefined;
   state = null;
   sessionActions.replaceChildren();
   app.replaceChildren();
@@ -397,6 +416,12 @@ function login() {
       { class: "login" },
       el("h1", {}, teacher ? "Teacher dashboard" : "Student access"),
       form,
+      actions(
+        button("Sign in by email", () => emailForm(teacher ? "teacher-sign-in" : "student-sign-in")),
+        teacher
+          ? button("Register as a teacher", () => emailForm("teacher-register"))
+          : button("Join with a course code", () => emailForm("student-join")),
+      ),
     ),
   );
   form.addEventListener("submit", (e) => {
@@ -414,23 +439,67 @@ function login() {
     });
   });
 }
-async function refresh() {
+function emailForm(purpose) {
+  const linking = purpose === "teacher-link";
+  const joining = purpose === "student-join";
+  const registering = purpose === "teacher-register";
+  const title = linking ? "Link teacher email" : joining ? "Join a course" : registering ? "Register as a teacher" : "Sign in by email";
+  const fields = [field("email", "Email", "email")];
+  if (registering) fields.push(field("name", "Name"));
+  if (joining) fields.push(
+    field("firstName", "First name"), field("lastName", "Last name"), field("courseCode", "Course code"),
+  );
+  const dialog = formModal(title, fields, async (data, form, first) => {
+    const { challengeId } = await api(linking ? "/identity/link" : "/identity/request", "POST", { purpose, ...data });
+    first.close();
+    const verify = formModal("Verify your email", [field("code", "Verification code")], async (entry, verifyForm, second) => {
+      const response = { challengeId, code: entry.code };
+      if (linking) await api("/identity/link/verify", "POST", response);
+      else await verifyEmailSignIn(response);
+      second.close();
+      await refresh();
+      if (linking) msg("Teacher email verified.", "success");
+    }, "Verify", "Enter the one-time code sent to your email.");
+    const code = verify.querySelector("input");
+    code.required = true;
+    code.autocomplete = "one-time-code";
+  }, "Email me a code");
+  for (const input of dialog.querySelectorAll("input")) input.required = true;
+}
+async function refresh(requestedCourse) {
   const epoch = authEpoch;
+  const id = ++refreshId;
+  const link = !teacher && !requestedCourse && location.hash !== openedNotification ? notificationLink() : null;
   msg("Loading…");
   const next = await api(
     teacher
       ? "/state" + (yearId ? "?yearId=" + encodeURIComponent(yearId) : "")
       : "/student",
-  );
-  if (epoch !== authEpoch) return;
+    "GET", undefined, false, requestedCourse || link?.course,
+  ).catch(error => {
+    if (teacher || requestedCourse || error.status !== 404) throw error;
+    return api("/student", "GET", undefined, false, null);
+  });
+  if (epoch !== authEpoch || id !== refreshId) return;
   state = next;
   if (teacher) {
     yearId = state.year.id;
     if (!state.courses.some((c) => c.id === courseId && !c.archived))
       courseId = state.courses.find((c) => !c.archived)?.id;
+  } else {
+    if (state.courses) selectCourse(state.course.id);
+    if (link?.course === state.course.id) tab = notificationTabs[link.kind];
   }
   render();
   msg();
+  if (link) {
+    openedNotification = link.hash;
+    const target = link.course === state.course.id
+      ? document.getElementById(notificationAnchor(link.kind, link.item).id)
+      : null;
+    if (target) target.focus();
+    else msg("This item is unavailable with your current course access.", "error");
+  }
 }
 let teacherView = "home";
 function teacherGo(view, selectedCourse = courseId, selectedChapter = null) {
@@ -471,6 +540,9 @@ window.addEventListener("popstate", () => {
   readTeacherRoute();
   if (teacher && state) render();
 });
+window.addEventListener("hashchange", () => {
+  if (!teacher && state && notificationLink()) run(() => refresh());
+});
 readTeacherRoute();
 async function leaveClassroom() {
   authEpoch++;
@@ -489,9 +561,37 @@ function render() {
     return;
   }
   sessionActions.replaceChildren(
+    button("Join another course", () => formModal("Join course", [field("code", "Course code", "text")], async (data, form, dialog) => {
+      const result = await command("courseCodes.join", data); dialog.close();
+      if (result.alreadyJoined) { msg("You are already enrolled in this course.", "success"); return; }
+      if (result.courseId) {
+        tab = "resources";
+        await refresh(result.courseId);
+        msg("Course joined.", "success");
+        return;
+      }
+      modal("Course joined", el("div", {}, el("p", {}, "Save this personal sign-in code for " + result.course + ":"), el("strong", {}, result.code), help("Sign out and use this code to open the course.")), true);
+    }, "Join"), "secondary small"),
+    button("Email preferences", studentEmailPreferences, "secondary small"),
     button("Refresh", refresh, "secondary small"),
     button("Sign out", leaveClassroom, "secondary small"),
   );
+  let courseSelector;
+  if (state.courses?.length > 1) {
+    courseSelector = field("course", "My courses", "select", state.course.id,
+      state.courses.map(c => ({ value: c.id, label: c.name + " · " + c.teacher })));
+    const input = courseSelector.querySelector("select");
+    input.addEventListener("change", () => run(async () => {
+      input.disabled = true;
+      try {
+        tab = "resources";
+        await refresh(input.value);
+      } finally {
+        input.value = state?.course?.id || "";
+        input.disabled = false;
+      }
+    }));
+  }
   app.replaceChildren(
     el(
       "div",
@@ -501,8 +601,10 @@ function render() {
         {},
         el("h1", {}, state.course.name),
         help(state.student.firstName + " " + state.student.lastName),
+        state.course.description ? help(state.course.description) : null,
       ),
       badge(state.year.label),
+      courseSelector,
     ),
   );
   const tabs = [
@@ -511,6 +613,10 @@ function render() {
     ["assignments", "Assignments"],
     ["projects", "Projects"],
     ["attendance", "Attendance"],
+    ["progress", "Progress"],
+    ["calendar", "Calendar"],
+    ["discussions", "Discussions"],
+    ["questions", "Ask my teacher"],
   ];
   app.append(
     el(
@@ -527,9 +633,8 @@ function render() {
             },
           },
           label +
-            (id === "announcements" && state.announcements.some((a) => !a.read)
-              ? " •"
-              : ""),
+            ((id === "announcements" && state.announcements.some((a) => !a.read)) ||
+             (id === "questions" && state.questions?.some(q => q.unread)) ? " •" : ""),
         ),
       ),
     ),
@@ -542,7 +647,24 @@ function render() {
     assignments: studentAssignments,
     projects: studentProjects,
     attendance: studentAttendance,
+    progress: studentProgress,
+    calendar: courseCalendarView,
+    discussions: discussionsView,
+    questions: studentQuestions,
   })[tab](view);
+}
+async function studentEmailPreferences() {
+  const prefs = await api("/notifications/preferences");
+  formModal("Email preferences", [
+    field("announcements", "Announcements, including important updates", "check", prefs.announcements),
+    field("resources", "Chapters and course materials", "check", prefs.resources),
+    field("assignments", "Exercises and assignments", "check", prefs.assignments),
+    field("projects", "Project tables", "check", prefs.projects),
+  ], async (data, form, dialog) => {
+    await api("/notifications/preferences", "POST", data);
+    dialog.close();
+    msg("Email preferences saved.", "success");
+  }, "Save preferences", "These choices apply to emails from this teacher.");
 }
 function moreActions(label, choices) {
   return button(
@@ -640,7 +762,7 @@ function renderTeacher() {
                 ).length;
               return teacherCard(
                 c.name,
-                countLabel(chapters.length, "chapter") +
+                (c.is_published === 0 ? "Unpublished · " : "") + countLabel(chapters.length, "chapter") +
                   " · " +
                   countLabel(count, "document"),
                 () => teacherGo("course", c.id),
@@ -710,6 +832,10 @@ function renderTeacher() {
           ["attendance", "Attendance", "Sessions and attendance records"],
           ["assignments", "Assignments", "Homework and submitted files"],
           ["projects", "Project tables", "Shared project registrations"],
+          ["questions", "Student questions", "Private questions and replies"],
+          ["activity", "Course activity", "Attendance, submissions, posts and downloads"],
+          ["calendar", "Calendar", "Classes, exams, deadlines and announcements"],
+          ["discussions", "Discussions", "Course conversations and moderation"],
         ].map(([id, title, description]) =>
           teacherCard(title, description, () => teacherGo(id, course.id)),
         ),
@@ -734,9 +860,218 @@ function renderTeacher() {
     attendance: teacherAttendance,
     assignments: teacherAssignments,
     projects: teacherProjects,
+    questions: teacherQuestions,
+    activity: teacherCourseActivity,
+    calendar: courseCalendarView,
+    discussions: discussionsView,
   };
   if (tools[teacherView]) tools[teacherView](view);
   else teacherGo("course", course.id);
+}
+function studentQuestions(view) {
+  const questions = state.questions || [];
+  if (assistantChat?.courseId !== state.course.id) assistantChat = { courseId: state.course.id, entries: [] };
+  const chat = assistantChat;
+  const entries = el("div", { class: "list", "aria-live": "polite" });
+  const input = field("assistantQuestion", "Ask about the course", "textarea");
+  const textarea = input.querySelector("textarea");
+  textarea.required = true;
+  textarea.maxLength = 1800;
+  const submit = el("button", { class: "button primary", type: "submit" }, "Ask assistant");
+  const form = el("form", {}, input, submit);
+  const draw = () => entries.replaceChildren(...chat.entries.map(entry => panel(
+    heading(entry.question),
+    entry.response.status === "answered" ? entry.response.blocks.map(block => el("div", {},
+      el("p", {}, block.text),
+      block.citations.map(source => el("div", { class: "notice" },
+        citationButton(chat.courseId, source),
+        el("blockquote", {}, source.quote),
+      )),
+    )) : el("p", {}, entry.response.message),
+    entry.response.status !== "answered"
+      ? button("Send to my teacher", () => privateQuestion(entry.question))
+      : null,
+  )));
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    run(async () => {
+      const question = textarea.value.trim();
+      if (!question) return;
+      const epoch = authEpoch;
+      submit.disabled = true;
+      const history = chat.entries.slice(-3).map(entry => entry.question.slice(0, 600));
+      try {
+        const response = await api("/assistant/ask", "POST", { question, history });
+        if (authEpoch !== epoch || assistantChat !== chat) return;
+        chat.entries.push({ question, response });
+        textarea.value = "";
+        draw();
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  });
+  draw();
+  view.append(panel(
+    heading("Course assistant"),
+    help("Ask about the published course materials. Check the cited sources and keep personal details out of assistant questions."),
+    entries, form,
+  ));
+  view.append(panel(
+    heading("Private questions", button("+ Ask your teacher", () => privateQuestion())),
+    help("Your teacher can reply here. A new reply is marked on the Ask My Teacher tab."),
+    questions.length ? questions.map(q => linkedPanel("question", q.id,
+      heading(q.question, q.unread ? badge("New reply") : q.resolved ? badge("Resolved") : null),
+      threadReplies(q),
+      actions(
+        button("Follow up", () => replyForm(q, false)),
+        q.unread ? button("Mark reply as read", () =>
+          saveRefresh("questions.read", { id: q.id, revision: q.revision })) : null,
+      ),
+    )) : empty("No private questions yet."),
+  ));
+}
+function citationButton(course, source) {
+  const location = source.location ? " · " + (source.mime === "application/pdf" ? "page " : "slide ") + source.location : "";
+  const title = (source.chapter ? source.chapter + " · " : "") + source.title + location;
+  if (source.mime === "application/pdf" && source.fileId)
+    return button(title, () => openFile(source.fileId, source.name, source.mime, source.location), "text-button");
+  const link = "#open/" + [course, source.kind, source.id].map(encodeURIComponent).join("/");
+  return el("a", { href: link }, title);
+}
+function privateQuestion(question = "") {
+  formModal("Ask your teacher privately", [field("question", "Your question", "textarea", question)],
+    (data, form, dialog) => saveRefresh("questions.ask", data, dialog), "Send");
+}
+function threadReplies(q) {
+  const messages = q.messages || (q.answer ? [{ author: "teacher", body: q.answer }] : []);
+  return messages.length ? messages.map(message => el("div", { class: "notice" },
+    el("strong", {}, message.author === "teacher" ? "Teacher" : "Student"),
+    message.created ? help(date(message.created)) : null,
+    el("p", {}, message.body),
+  )) : help("Waiting for the teacher’s reply.");
+}
+function replyForm(q, asTeacher) {
+  const name = asTeacher ? "answer" : "question";
+  formModal(asTeacher ? "Reply to student" : "Follow up privately", [field(name, "Reply", "textarea")],
+    (data, form, dialog) => saveRefresh(asTeacher ? "questions.answer" : "questions.followUp",
+      { ...data, id: q.id, revision: q.revision }, dialog), "Send reply");
+}
+function teacherQuestions(view) {
+  const questions = (state.questions || []).filter(q => q.course_id === courseId);
+  const search = field("questionSearch", "Search questions", "search");
+  const filter = field("questionStatus", "Status", "select", "", [
+    { value: "", label: "All questions" }, { value: "unanswered", label: "Needs a reply" },
+    { value: "answered", label: "Answered" }, { value: "resolved", label: "Resolved" },
+  ]);
+  const input = search.querySelector("input"), status = filter.querySelector("select"), list = el("div");
+  const draw = () => {
+    const query = input.value.toLowerCase().trim();
+    const matching = questions.filter(q => (!status.value || status.value === q.status)
+      && [enrollmentName(q.enrollment_id), q.question, ...(q.messages || []).map(message => message.body)]
+        .some(value => String(value || "").toLowerCase().includes(query)));
+    list.replaceChildren(...(matching.length ? matching.map(q => panel(
+      heading(enrollmentName(q.enrollment_id), badge(q.status || (q.answer ? "answered" : "unanswered"))),
+      el("p", {}, q.question), threadReplies(q),
+      actions(
+        button("Reply", () => replyForm(q, true), "primary"),
+        button(q.resolved ? "Reopen" : "Resolve", () => saveRefresh("questions.resolve", { id: q.id, resolved: !q.resolved })),
+      ),
+    )) : [empty("No questions match these filters.")]));
+  };
+  input.addEventListener("input", draw);
+  status.addEventListener("change", draw);
+  view.append(panel(
+    heading("Student questions", button("Index course materials", () => indexCourseMaterials(courseId))),
+    el("div", { class: "form-grid" }, search, filter),
+    list,
+  ));
+  draw();
+}
+async function indexCourseMaterials(id) {
+  const { documents } = await api("/assistant/documents?courseId=" + encodeURIComponent(id));
+  const body = el("div");
+  const dialog = modal("Index course materials", body, true);
+  const rows = documents.map(document => {
+    const status = el("span", {}, document.indexed_at
+      ? document.extracted + " of " + document.locations + " pages or slides readable"
+      : "Awaiting indexing");
+    const index = async () => {
+      status.textContent = "Reading document…";
+      try {
+        const blob = await api("/files/" + encodeURIComponent(document.file_id), "GET", undefined, true);
+        const pages = await extractCoursePages(document, blob);
+        const result = await api("/assistant/documents", "POST", {
+          courseId: id, documentId: document.id, fileId: document.file_id, pages,
+        });
+        document.indexed_at = true;
+        status.textContent = result.extracted + " of " + result.locations + " pages or slides readable";
+      } catch (error) {
+        status.textContent = error.message;
+        if (error.status === 401) throw error;
+      }
+    };
+    return { document, status, index, action: button(document.indexed_at ? "Re-index" : "Index", index) };
+  });
+  body.append(
+    help("The assistant uses published PDF and PowerPoint text. Scanned images and image-only slides may have no readable text. Published assignment instructions are included automatically."),
+    rows.length ? button("Index missing materials", async () => {
+      for (const row of rows) {
+        if (!dialog.open) break;
+        if (row.document.indexed_at || row.action.disabled) continue;
+        row.action.disabled = true;
+        try { await row.index(); } finally { row.action.disabled = false; }
+      }
+    }, "primary") : empty("Publish a chapter and its documents before indexing."),
+    rows.length ? table(["Document", "Chapter", "Index", ""],
+      rows.map(row => [row.document.title, row.document.chapter, row.status, row.action])) : null,
+  );
+}
+
+async function extractCoursePages(document, blob) {
+  const pages = [];
+  if (document.mime === "application/pdf") {
+    const pdf = await loadClassroomPdf(blob);
+    try {
+      if (pdf.numPages > 300) throw new Error("Index up to 300 pages per PDF.");
+      for (let location = 1; location <= pdf.numPages; location++) {
+        const page = await pdf.getPage(location);
+        const { items } = await page.getTextContent();
+        pages.push({ location, text: items.map(item => item.str || "").join(" ") });
+        page.cleanup();
+      }
+    } finally {
+      await pdf.destroy();
+    }
+  } else {
+    const JSZip = await library("JSZip");
+    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+    const parser = new DOMParser();
+    const xml = async path => {
+      const entry = zip.file(path);
+      if (!entry) throw new Error("This PowerPoint file has an unreadable slide structure.");
+      const result = parser.parseFromString(await entry.async("string"), "application/xml");
+      if (result.getElementsByTagName("parsererror").length) throw new Error("This PowerPoint file contains invalid slide XML.");
+      return result;
+    };
+    const relationships = await xml("ppt/_rels/presentation.xml.rels");
+    const targets = new Map(Array.from(relationships.getElementsByTagNameNS("*", "Relationship"), item =>
+      [item.getAttribute("Id"), item.getAttribute("Target")]));
+    const presentation = await xml("ppt/presentation.xml");
+    const slides = Array.from(presentation.getElementsByTagNameNS("*", "sldId"));
+    if (!slides.length || slides.length > 300) throw new Error("Index up to 300 slides per presentation.");
+    for (const [index, slide] of slides.entries()) {
+      const relationship = Array.from(slide.attributes).find(attribute => attribute.localName === "id" && attribute.namespaceURI);
+      const path = targets.get(relationship?.value)?.replace(/^\/ppt\//, "");
+      if (!/^slides\/slide\d+\.xml$/.test(path || "")) throw new Error("This PowerPoint slide is unavailable.");
+      const content = await xml("ppt/" + path);
+      pages.push({ location: index + 1, text: Array.from(content.getElementsByTagNameNS("*", "t"), item => item.textContent).join(" ") });
+    }
+  }
+  if (pages.some(page => page.text.length > 24000) ||
+      new TextEncoder().encode(JSON.stringify(pages)).byteLength > 800000)
+    throw new Error("This file contains too much text to index. Split it into smaller documents.");
+  return pages;
 }
 function countLabel(count, word) {
   return count + " " + word + (count === 1 ? "" : "s");
@@ -759,9 +1094,35 @@ function teacherCourses(view) {
       el(
         "div",
         { class: "toolbar" },
-        el("h1", {}, course.name),
+        el("div", {}, el("h1", {}, course.name),
+          course.is_published === 0 ? badge("Unpublished") : null,
+          course.description ? help(course.description) : null),
         moreActions("Course options", [
-          { label: "Rename course", run: () => courseForm(course) },
+          {label: "View course code", run: async () => {
+            const result = await command("courseCodes.reveal", {courseId:course.id});
+            modal("Course code", el("div", {},
+              result.code ? el("strong", {}, result.code) : null,
+              help(result.code ? "Share this code privately. Students can use it while the course and code are active."
+                : result.active ? "Replace this older code to view a shareable code." : "This code is inactive. Replace it to allow new enrollments.")));
+          }},
+          {label: "Replace course code", run: async () => {
+            const result = await command("courseCodes.regenerate", {courseId:course.id});
+            modal("Course code", el("div", {}, el("strong", {}, result.code), help("Share this code privately. Generating a new code replaces the previous code.")), true);
+          }},
+          {label: "Deactivate course code", run: () => saveRefresh("courseCodes.deactivate", {courseId:course.id})},
+          {
+            label: course.is_published === 0 ? "Publish course" : "Hide course",
+            run: () => {
+              const publish = course.is_published === 0;
+              if (publish) return confirmAction(
+                "Publish course?",
+                "Students will be able to join and see items you have made visible. Hidden items and drafts stay private.",
+                () => saveRefresh("courses.publish", { id: course.id, published: true }),
+              );
+              return saveRefresh("courses.publish", { id: course.id, published: false });
+            },
+          },
+          { label: "Edit course details", run: () => courseForm(course) },
           {
             label: "Preview as a student",
             run: async () => {
@@ -773,7 +1134,8 @@ function teacherCourses(view) {
               modal(course.name + " · Student preview", body, true);
             },
           },
-          { label: "Copy to another year", run: () => duplicateCourse(course) },
+          { label: "Copy course", run: () => duplicateCourse(course) },
+          { label: "Incomplete course copies", run: () => showCopyJobs(course) },
           {
             label: "Archive course",
             kind: "danger",
@@ -971,8 +1333,11 @@ function teacherCourses(view) {
 
 function courseForm(course) {
   formModal(
-    course ? "Rename course" : "Add course",
-    [field("name", "Course name", "text", course?.name)],
+    course ? "Edit course details" : "Add course",
+    [
+      field("name", "Course name", "text", course?.name),
+      field("description", "Description", "textarea", course?.description),
+    ],
     async (data, form, dialog) => {
       const r = await command("courses.save", {
         ...data,
@@ -992,6 +1357,8 @@ function chapterForm(chapter) {
     chapter ? "Edit chapter" : "Add chapter",
     [
       field("name", "Chapter title", "text", chapter?.name),
+      field("week", "Week (optional)", "number", chapter?.week),
+      field("topic", "Topic (optional)", "text", chapter?.topic),
       ...(chapter
         ? [
             field("status", "Visibility", "select", chapter.status, pubOptions),
@@ -1059,17 +1426,65 @@ async function moveChapter(direction) {
   });
 }
 function duplicateCourse(c) {
+  const requestId = crypto.randomUUID();
   formModal(
     "Copy course",
     [
       field("name", "Course name", "text", c.name),
+      field("description", "Description", "textarea", c.description),
       field("yearId", "Destination year", "select", yearId, yearOptions()),
     ],
-    (data, form, dialog) =>
-      saveRefresh("courses.duplicate", { ...data, id: c.id }, dialog),
+    async (data, form, dialog) => {
+      dialog.querySelector(".dialog-status").textContent = "Preparing the copy…";
+      const job = await command("courses.duplicate", { ...data, id: c.id, requestId });
+      await finishCourseCopy(job, dialog);
+    },
     "Copy",
-    "The copy starts hidden. Original files are preserved.",
+    "The copy and its content start unpublished. Review any existing deadlines and dates before publishing. You can resume from Incomplete course copies.",
   );
+}
+async function finishCourseCopy(job, dialog, discard = false) {
+  const status = dialog.querySelector(".dialog-status");
+  const action = discard ? "courses.copyDiscard" : "courses.copyContinue";
+  while (dialog.open && (job.copyStatus === "pending" || discard && job.copyStatus === "discarding")) {
+    status.textContent = (discard ? "Cleaning up" : "Copying") + " · " + job.processed + " of " + job.total + " files";
+    job = await command(action, { jobId: job.jobId });
+  }
+  if (!dialog.open) return;
+  if (job.copyStatus === "discarding") throw new Error("This copy is being discarded. Resume cleanup from Incomplete course copies.");
+  dialog.close();
+  if (job.copyStatus === "complete") {
+    yearId = job.yearId;
+    await refresh();
+    teacherGo("course", job.id);
+    msg("Course copied. It is unpublished.", "success");
+  } else {
+    msg("Incomplete copy discarded.", "success");
+  }
+}
+async function showCopyJobs(course) {
+  const { jobs } = await command("courses.copyJobs", { id: course.id });
+  const content = el("div");
+  const dialog = modal("Incomplete course copies", content, true);
+  if (!jobs.length) {
+    content.append(empty("No incomplete copies for this course."));
+    return;
+  }
+  content.append(table(["Copy", "Progress", "Actions"], jobs.map(job => [
+    job.name,
+    (job.copyStatus === "discarding" ? "Cleanup · " : "") + job.processed + " / " + job.total + " files",
+    job.copyStatus === "discarding"
+      ? button("Resume cleanup", () => finishCourseCopy(job, dialog, true))
+      : actions(
+        button("Resume copy", () => finishCourseCopy(job, dialog), "primary"),
+        button("Discard copy", () => {
+          dialog.close();
+          formModal("Discard incomplete copy?", [],
+            (data, form, confirm) => finishCourseCopy(job, confirm, true),
+            "Discard copy", "Files created for this incomplete copy will be removed. The original course is preserved.");
+        }),
+      ),
+  ])));
 }
 function resourceUpload(parentId, category = "resource") {
   const f = field("files", "Choose files", "file");
@@ -1113,26 +1528,47 @@ function resourceList(view, data) {
       placeholder: "Search resources",
       "aria-label": "Search resources",
     }),
-    list = el("div");
-  view.append(search, list);
+    list = el("div", { class: "resource-results" });
+  const typeOf = document => document.file?.mime === "application/pdf" ? "PDF" : document.file?.mime?.includes("presentation") ? "PowerPoint" : "";
+  const weeks = [...new Set(data.chapters.map(chapter => chapter.week).filter(Boolean))].sort((a,b) => a-b);
+  const topics = [...new Set(data.chapters.map(chapter => chapter.topic).filter(Boolean))].sort((a,b) => a.localeCompare(b));
+  const filter = (name, label, options) => field(name, label, "select", "", [
+    { value: "", label: "All" }, ...options.map(value => ({ value: String(value), label: String(value) })),
+  ]);
+  const week = filter("weekFilter", "Week", weeks), topic = filter("topicFilter", "Topic", topics),
+    type = filter("typeFilter", "File type", ["PDF", "PowerPoint"]);
+  const filters = el("div", { class: "form-grid resource-filters" }, weeks.length ? week : null, topics.length ? topic : null, type);
+  const byChapter = new Map();
+  for (const doc of data.documents) {
+    const id = doc.chapterId || doc.chapter_id;
+    if (!byChapter.has(id)) byChapter.set(id, []);
+    byChapter.get(id).push(doc);
+  }
+  const normalize = value => value.toLocaleLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+  view.append(search, filters, list);
   const draw = () => {
     list.replaceChildren();
-    const q = search.value.toLowerCase();
+    const terms = normalize(search.value).trim().split(/\s+/u).filter(Boolean);
+    const selectedWeek = week.querySelector("select").value, selectedTopic = topic.querySelector("select").value,
+      selectedType = type.querySelector("select").value;
+    const matches = value => terms.every(term => normalize(value).includes(term));
     for (const chapter of data.chapters) {
-      const docs = data.documents.filter(
-        (d) =>
-          (d.chapterId || d.chapter_id) === chapter.id &&
-          (!q || [chapter.name, d.title].join(" ").toLowerCase().includes(q)),
+      if (selectedWeek && String(chapter.week) !== selectedWeek || selectedTopic && chapter.topic !== selectedTopic) continue;
+      const chapterText = [chapter.name, chapter.topic, chapter.week && "Week " + chapter.week].filter(Boolean).join(" ");
+      const docs = (byChapter.get(chapter.id) || []).filter(d =>
+        (!selectedType || typeOf(d) === selectedType) &&
+        matches([chapterText, d.title, d.file?.name, typeOf(d)].filter(Boolean).join(" "))
       );
-      if (q && !docs.length) continue;
+      if (!docs.length && (selectedType || !matches(chapterText))) continue;
       list.append(
-        panel(
+        linkedPanel("chapter", chapter.id,
           heading(chapter.name),
+          chapter.week || chapter.topic ? help([chapter.week && "Week " + chapter.week, chapter.topic].filter(Boolean).join(" · ")) : null,
           docs.length
             ? docs.map((d) =>
                 el(
                   "div",
-                  { class: "resource" },
+                  { class: "resource", ...notificationAnchor("document", d.id) },
                   el(
                     "div",
                     {},
@@ -1151,11 +1587,9 @@ function resourceList(view, data) {
                     ),
                   ),
                   actions(
-                    d.file
+                    d.file?.mime === "application/pdf"
                       ? button(
-                          d.file.mime === "application/pdf"
-                            ? "View PDF"
-                            : "Download",
+                          "View PDF",
                           () =>
                             openFile(
                               d.fileId || d.file_id,
@@ -1178,10 +1612,11 @@ function resourceList(view, data) {
     }
     if (!list.children.length)
       list.append(
-        empty(q ? "No matching resources." : "No published chapters."),
+        empty(terms.length || selectedWeek || selectedTopic || selectedType ? "No matching resources." : "No published chapters."),
       );
   };
   search.addEventListener("input", draw);
+  filters.addEventListener("change", draw);
   draw();
 }
 function studentResources(view) {
@@ -1198,18 +1633,9 @@ async function downloadFile(id, name) {
   download(blob, name);
   msg();
 }
-async function openFile(id, name, mime) {
-  if (mime !== "application/pdf") return downloadFile(id, name);
-  msg("Opening PDF…");
-  const blob = await api(
-      "/files/" + encodeURIComponent(id) + "?inline=1",
-      "GET",
-      undefined,
-      true,
-    ),
-    bytes = new Uint8Array(await blob.arrayBuffer());
-  const pdf = await getDocument({
-    data: bytes,
+async function loadClassroomPdf(blob) {
+  return getDocument({
+    data: new Uint8Array(await blob.arrayBuffer()),
     isEvalSupported: false,
     stopAtErrors: true,
     cMapUrl: new URL("./vendor/pdfjs/cmaps/", import.meta.url).href,
@@ -1220,7 +1646,13 @@ async function openFile(id, name, mime) {
     ).href,
     wasmUrl: new URL("./vendor/pdfjs/wasm/", import.meta.url).href,
   }).promise;
-  let page = 1;
+}
+async function openFile(id, name, mime, location = 1) {
+  if (mime !== "application/pdf") return downloadFile(id, name);
+  msg("Opening PDF…");
+  const blob = await api("/files/" + encodeURIComponent(id) + "?inline=1", "GET", undefined, true);
+  const pdf = await loadClassroomPdf(blob);
+  let page = Math.min(Math.max(1, location), pdf.numPages);
   const canvas = el("canvas"),
     count = el("span"),
     surface = el("div", { class: "pdf-surface" }, canvas),
@@ -1401,7 +1833,7 @@ function studentForm(s, e) {
     [
       field("firstName", "First name", "text", s?.first_name),
       field("lastName", "Last name", "text", s?.last_name),
-      field("email", "Email", "email", s?.email),
+      field("email", "Email (optional)", "email", s?.email),
       field(
         "courseId",
         "Course",
@@ -1409,10 +1841,14 @@ function studentForm(s, e) {
         e?.course_id || courseId,
         courseOptions(),
       ),
-      ...(s ? [field("active", "Active", "check", !!s.active)] : []),
+      ...(s ? [
+        field("active", "Student account active", "check", !!s.active),
+        field("enrolled", "Course enrollment active", "check", e?.status === "active"),
+      ] : []),
     ],
     (data, form, dialog) =>
-      saveRefresh("students.save", { ...data, id: s?.id, yearId }, dialog),
+      saveRefresh("students.save", { ...data, id: s?.id, enrollmentId: e?.id, yearId,
+        status: s && !data.enrolled ? "inactive" : "active" }, dialog),
   );
 }
 function showCodes() {
@@ -1550,16 +1986,18 @@ function importStudents() {
         last = headers.findIndex((h) =>
           ["lastname", "surname", "nom"].includes(h),
         ),
+        full = headers.findIndex((h) => ["name", "fullname", "nomcomplet"].includes(h)),
         email = headers.findIndex((h) =>
           ["email", "emailaddress", "courriel"].includes(h),
         );
-      if ([first, last, email].some((i) => i < 0))
-        throw new Error("Headers required: First name, Last name, Email.");
-      importRows = rows.map((r) => ({
-        firstName: r[first] || "",
-        lastName: r[last] || "",
-        email: r[email] || "",
-      }));
+      if ((first < 0 || last < 0) && full < 0)
+        throw new Error("Use First name and Last name headers, or a single Name header. Email is optional.");
+      importRows = rows.map((r) => {
+        if (first >= 0 && last >= 0) return { firstName: r[first] || "", lastName: r[last] || "", email: r[email] || "" };
+        const names = (r[full] || "").trim().split(/\s+/);
+        const lastName = names.pop();
+        return { firstName: names.join(" "), lastName, email: r[email] || "" };
+      });
       const preview = await command("students.preview", {
         yearId,
         courseId,
@@ -1570,7 +2008,7 @@ function importStudents() {
         "div",
         {},
         help(
-          "Existing email addresses will be updated and enrolled in this course for " +
+          "Matching students will be updated and enrolled in this course for " +
             state.year.label +
             ".",
         ),
@@ -1604,7 +2042,7 @@ function importStudents() {
       );
     },
     "Preview",
-    "CSV / XLSX · First name, Last name, Email · Up to 500 students per import.",
+    "CSV / XLSX · First name and Last name, or Name · Email is optional · Up to 500 students per import.",
   );
 }
 function teacherAnnouncements(view) {
@@ -1631,6 +2069,7 @@ function teacherAnnouncements(view) {
                   "text-button document-link",
                 ),
                 badge(a.status),
+                a.important ? badge("Important") : null,
                 help(a.readCount + " read"),
               ),
               moreActions("Announcement options", [
@@ -1661,11 +2100,12 @@ function announcementForm(a) {
     { value: "scheduled", label: "Scheduled" },
     { value: "archived", label: "Archived" },
   ];
-  formModal(
+  const dialog = formModal(
     a ? "Edit announcement" : "New announcement",
     [
       field("title", "Title", "text", a?.title),
       field("body", "Message", "textarea", a?.body),
+      field("important", "Mark as important", "check", !!a?.important),
       field(
         "courseIds",
         "Courses (choose one or more)",
@@ -1688,6 +2128,7 @@ function announcementForm(a) {
         dialog,
       ),
   );
+  revealScheduledDate(dialog);
 }
 function studentAnnouncements(view) {
   if (!state.announcements.length) {
@@ -1698,8 +2139,8 @@ function studentAnnouncements(view) {
     view.append(
       el(
         "section",
-        { class: "panel" + (!a.read ? " unread" : "") },
-        heading(a.title, !a.read ? badge("Unread") : null),
+        { class: "panel" + (!a.read ? " unread" : ""), ...notificationAnchor("announcement", a.id) },
+        heading(a.title, a.important ? badge("Important") : null, !a.read ? badge("Unread") : null),
         help(date(a.date)),
         el("p", {}, a.body),
         actions(
@@ -1719,6 +2160,7 @@ function teacherAttendance(view) {
   const sessions = state.attendanceSessions.filter(
     (s) => s.course_id === courseId,
   );
+  const groups = (state.attendanceGroups || []).filter(g => g.course_id === courseId);
   view.append(
     panel(
       heading(
@@ -1731,10 +2173,14 @@ function teacherAttendance(view) {
                 "date",
                 "Date",
                 "date",
-                new Date().toISOString().slice(0, 10),
+                localDate(Date.now()).slice(0, 10),
               ),
               field("time", "Time", "time"),
               field("title", "Session title", "text"),
+              ...(groups.length ? [field("groupId", "Group", "select", "", [
+                { value: "", label: "Whole course" },
+                ...groups.map(group => ({ value: group.id, label: group.name })),
+              ])] : []),
             ],
             async (data, form, dialog) => {
               const result = await saveRefresh(
@@ -1746,14 +2192,16 @@ function teacherAttendance(view) {
             },
           ),
         ),
+        button("Groups", () => attendanceGroups(groups)),
         button("Reports", attendanceReports),
       ),
       sessions.length
         ? table(
-            ["Date", "Session", "Status", ""],
+            ["Date", "Session", "Group", "Status", ""],
             sessions.map((s) => [
               date(s.date) + " " + s.time,
               s.title,
+              groups.find(g => g.id === s.group_id)?.name || "Whole course",
               badge(s.finalized ? "Finalized" : "Draft"),
               button("Open roster", () => attendanceEditor(s.id)),
             ]),
@@ -1762,12 +2210,35 @@ function teacherAttendance(view) {
     ),
   );
 }
+function attendanceGroups(groups) {
+  const body = el("div");
+  const list = modal("Attendance groups", body);
+  const open = (group) => {
+    list.close();
+    const active = new Set(state.enrollments
+      .filter(e => e.course_id === courseId && e.status === "active").map(e => e.student_id));
+    const students = state.students.filter(s => s.active && active.has(s.id));
+    formModal(group ? "Edit attendance group" : "New attendance group", [
+      field("name", "Group name", "text", group?.name),
+      field("studentIds", "Group members", "multi", group ? JSON.parse(group.member_ids) : [],
+        students.map(s => ({ value: s.id, label: s.first_name + " " + s.last_name }))),
+    ], (data, form, dialog) =>
+      saveRefresh("attendance.group", { ...data, courseId, id: group?.id }, dialog),
+    "Save group", "Select the students to include in future sessions for this group.");
+  };
+  body.append(
+    button("+ Add group", () => open(), "primary"),
+    groups.length ? table(["Group", ""], groups.map(group => [group.name, button("Edit group", () => open(group))]))
+      : empty("No attendance groups for this course."),
+  );
+}
 async function attendanceEditor(id) {
   const data = await api("/attendance/" + id),
     controls = [];
+  const savedRecords = new Map(data.records.map(record => [record.student_id, record]));
   const body = el("div"),
     rows = data.students.map((s) => {
-      const record = data.records.find((r) => r.student_id === s.id);
+      const record = savedRecords.get(s.id);
       const select = field(
           "status-" + s.id,
           "Status for " + s.first_name + " " + s.last_name,
@@ -1790,6 +2261,12 @@ async function attendanceEditor(id) {
       return [s.first_name + " " + s.last_name, select, note];
     });
   const d = modal("Attendance · " + date(data.session.date), body, true);
+  const sessionDate = field("date", "Session date", "date", data.session.date);
+  const headers = ["Student", "Status", "Note"];
+  const savedRows = data.students.map(s => {
+    const record = savedRecords.get(s.id);
+    return [s.first_name + " " + s.last_name, record?.status || "", record?.note || ""];
+  });
   const save = async (finalized) => {
     const records = controls
       .filter((c) => c.select.value)
@@ -1805,11 +2282,13 @@ async function attendanceEditor(id) {
       revision: data.session.revision,
       records,
       finalized,
+      date: sessionDate.querySelector("input").value,
     });
     d.close();
     await refresh();
   };
   body.append(
+    sessionDate,
     actions(
       button("Mark all present", () => {
         controls.forEach((c) => {
@@ -1819,8 +2298,12 @@ async function attendanceEditor(id) {
       button("Save draft", () => save(false)),
       button("Finalize", () => save(true), "primary"),
     ),
-    table(["Student", "Status", "Note"], rows),
-    help("Only finalized records appear to students."),
+    table(headers, rows),
+    help("Only finalized records appear to students. Exports use the last saved marks."),
+    actions(
+      button("Export session to Excel", () => spreadsheet(headers, savedRows, "attendance-" + data.session.date)),
+      button("Print session / Save as PDF", () => printReport("Attendance · " + data.session.date + " · " + data.session.title, headers, savedRows)),
+    ),
   );
 }
 async function attendanceReports() {
@@ -1870,6 +2353,13 @@ async function attendanceReports() {
         ["Student", "Present", "Absent", "Late", "Excused", "Attendance"],
         rows,
       ),
+      report.groups?.length
+        ? table(["Course", "Group", "Present", "Absent", "Late", "Excused", "Attendance"],
+          report.groups.map(g => [
+            courseName(g.courseId), g.name, g.present, g.absent, g.late, g.excused,
+            g.percentage === null ? "—" : g.percentage + "%",
+          ]))
+        : null,
       help("Percentages use finalized sessions and the policy in Settings."),
     );
   };
@@ -1925,6 +2415,230 @@ function studentAttendance(view) {
     ),
   );
 }
+function courseStats(entries) {
+  return el("div", { class: "stats" }, entries.map(([label, value]) =>
+    el("div", { class: "stat" }, label, el("strong", {}, value)),
+  ));
+}
+
+function courseItemLink(kind, id, title) {
+  const target = [state.course.id, kind, id].map(encodeURIComponent).join("/");
+  return el("a", { href: "#open/" + target }, title);
+}
+
+function studentProgress(view) {
+  const submissions = new Map();
+  for (const submission of state.submissions) {
+    const current = submissions.get(submission.assignmentId) || [];
+    current.push(submission);
+    submissions.set(submission.assignmentId, current);
+  }
+  const rows = state.assignments.map(assignment => {
+    const work = submissions.get(assignment.id) || [];
+    const reviewed = work.find(item => item.grade || item.feedback);
+    const submitted = reviewed || work.find(item => item.files.length);
+    return { assignment, reviewed, submitted };
+  });
+  const attendance = state.attendance.summaries[0]?.percentage;
+  view.append(
+    heading("My progress"),
+    courseStats([
+      ["Finalized attendance", attendance == null ? "—" : attendance + "%"],
+      ["Assignments submitted", rows.filter(row => row.submitted).length + " / " + rows.length],
+      ["Assignments with feedback", rows.filter(row => row.reviewed).length],
+      ["Discussion posts", state.discussionPosts ?? 0],
+    ]),
+    panel(heading("Assignment progress"), rows.length ? table(
+      ["Assignment", "Status", "Grade"],
+      rows.map(({ assignment, reviewed, submitted }) => [
+        courseItemLink("assignment", assignment.id, assignment.title),
+        reviewed ? "Reviewed" : submitted ? "Submitted" : "Awaiting submission",
+        reviewed?.grade || "—",
+      ]),
+    ) : empty("No published assignments.")),
+  );
+}
+
+async function teacherCourseActivity(view) {
+  const selectedCourse = courseId;
+  const params = new URLSearchParams({ courseId: selectedCourse });
+  const reportParams = new URLSearchParams({ yearId, courseId: selectedCourse });
+  const body = el("div", { role: "status" }, "Loading course activity…");
+  view.append(heading("Course activity"), body);
+  try {
+    const [activity, attendance] = await Promise.all([
+      api("/course-activity?" + params), api("/attendance-report?" + reportParams),
+    ]);
+    if (!view.isConnected) return;
+    const summaries = new Map(attendance.summaries.map(item => [item.studentId, item]));
+    const enrollments = new Map(state.enrollments.map(item => [item.id, item]));
+    body.removeAttribute("role");
+    body.replaceChildren(
+      courseStats([
+        ["Active enrollments", activity.students.length],
+        ["Published assignments", activity.assignments],
+        ["Resource downloads", activity.downloads],
+        ["Students who posted", activity.students.filter(student => student.posts > 0).length],
+        ["Announcement readers", activity.announcementReaders],
+      ]),
+      help(activity.firstDownloadDay
+        ? "Download requests recorded since " + date(activity.firstDownloadDay) + ". Repeat downloads count separately."
+        : "Download counts start when this feature goes live."),
+      panel(heading("Student progress"), activity.students.length ? table(
+        ["Student", "Finalized attendance", "Submitted", "Reviewed", "Discussion posts"],
+        activity.students.map(student => {
+          const studentId = enrollments.get(student.enrollmentId)?.student_id;
+          const percentage = summaries.get(studentId)?.percentage;
+          return [
+            studentName(studentId) || "Student",
+            percentage == null ? "—" : percentage + "%",
+            student.submitted + " / " + activity.assignments,
+            student.reviewed,
+            student.posts,
+          ];
+        }),
+      ) : empty("No active enrollments.")),
+    );
+  } catch (error) {
+    body.textContent = error.message;
+  }
+}
+
+const calendarLabels = {
+  class: "Class", exam: "Exam", event: "Course event",
+  assignment: "Assignment deadline", announcement: "Important announcement",
+};
+
+function courseCalendarView(view) {
+  const selectedCourse = teacher ? courseId : state.course.id;
+  const body = el("div", { "aria-live": "polite" });
+  const load = async () => {
+    body.textContent = "Loading calendar…";
+    try {
+      const { items } = await api("/calendar?" + new URLSearchParams({ courseId: selectedCourse }));
+      if (!view.isConnected) return;
+      const upcoming = items.filter(item => Date.parse(item.at) >= Date.now());
+      const past = items.filter(item => Date.parse(item.at) < Date.now()).reverse();
+      const rows = items => items.map(item => {
+        const isEvent = !["assignment", "announcement"].includes(item.kind);
+        return el("div", { class: "resource" },
+          el("div", {},
+            teacher || isEvent ? el("strong", {}, item.title) : courseItemLink(item.kind, item.id, item.title),
+            help(calendarLabels[item.kind] + " · " + date(item.at)),
+            item.body ? el("p", { class: "course-text" }, item.body) : null,
+            teacher ? badge(item.status) : null,
+          ),
+          teacher && isEvent ? actions(
+            button("Edit", () => editEvent(item)),
+            button("Remove", () => confirmAction("Remove this event?", item.title, async () => {
+              await command("calendar.delete", { courseId: selectedCourse, id: item.id });
+              await load();
+              msg("Event removed.", "success");
+            }), "danger"),
+          ) : null,
+        );
+      });
+      body.replaceChildren(
+        panel(heading("Upcoming"), upcoming.length ? rows(upcoming) : empty("Nothing scheduled.")),
+      );
+      if (past.length) body.append(el("details", { class: "panel" }, el("summary", {}, "Past dates"), rows(past)));
+    } catch (error) {
+      body.replaceChildren(help(error.message), button("Retry", load));
+    }
+  };
+  function editEvent(item) {
+    formModal(item ? "Edit event" : "New calendar event", [
+      field("title", "Title", "text", item?.title),
+      field("kind", "Event type", "select", item?.kind || "class",
+        ["class", "exam", "event"].map(value => ({ value, label: calendarLabels[value] }))),
+      field("at", "Date and time", "datetime-local", localDate(item?.at)),
+      field("body", "Details", "textarea", item?.body),
+      field("status", "Visibility", "select", item?.status || "hidden", pubOptions.slice(0, 2)),
+    ], async (data, form, dialog) => {
+      await command("calendar.save", { ...data, id: item?.id, courseId: selectedCourse, at: iso(data.at) });
+      dialog.close();
+      await load();
+      msg("Event saved.", "success");
+    });
+  }
+  view.append(heading("Calendar", teacher ? button("+ New event", () => editEvent(), "primary") : null), body);
+  return load();
+}
+
+function discussionsView(view) {
+  const selectedCourse = teacher ? courseId : state.course.id;
+  const body = el("div", { "aria-live": "polite" });
+  let request = 0;
+  const load = async (threadId, after) => {
+    const id = ++request;
+    const params = new URLSearchParams({ courseId: selectedCourse });
+    if (threadId) params.set("threadId", threadId);
+    if (after) params.set("after", after);
+    if (!after) body.textContent = "Loading discussions…";
+    try {
+      const { thread, posts, after: nextPage } = await api("/discussions?" + params);
+      if (!view.isConnected || id !== request) return;
+      const rows = posts.map(post => thread ? postCard(post, thread.id) : panel(
+        heading(post.title, button("Open discussion", () => load(post.id))),
+        postDetails(post),
+      ));
+      if (after) {
+        body.querySelector(".discussion-more")?.remove();
+        body.append(...rows);
+      } else {
+        body.replaceChildren(...(thread ? [
+          button("← All discussions", () => load(), "text-button"),
+          postCard(thread, thread.id),
+          thread.status === "open" ? el("div", { class: "discussion-new" }, button("Reply", () => postForm(thread), "primary")) : help("Replies are closed."),
+        ] : [
+          el("div", { class: "discussion-new" }, button("+ New discussion", () => postForm(), "primary")),
+        ]), ...(rows.length ? rows : [empty(thread ? "No replies yet." : "No discussions yet.")]));
+      }
+      if (nextPage) body.append(el("div", { class: "discussion-more" },
+        button(thread ? "More replies" : "Older discussions", () => load(threadId, nextPage))));
+    } catch (error) {
+      if (!view.isConnected || id !== request) return;
+      if (after) msg(error.message, "error");
+      else body.replaceChildren(help(error.message), button("All discussions", () => load()));
+    }
+  };
+  const postDetails = post => el("div", {},
+    help(post.author + " · " + date(post.created)),
+    el("p", { class: "course-text" }, post.body),
+    post.status === "open" ? null : badge(post.status),
+  );
+  function postCard(post, threadId) {
+    const isThread = post.id === threadId;
+    const options = post.status === "hidden" ? [[isThread ? "Restore and open replies" : "Restore", "open"]] : [
+      ["Hide", "hidden"],
+      ...(isThread ? [post.status === "closed" ? ["Reopen replies", "open"] : ["Close replies", "closed"]] : []),
+    ];
+    return panel(
+      isThread ? heading(post.title) : null,
+      postDetails(post),
+      teacher ? actions(options.map(([label, status]) => button(label, async () => {
+        await command("discussions.moderate", { courseId: selectedCourse, id: post.id, status });
+        await load(threadId);
+        msg("Discussion updated.", "success");
+      }))) : null,
+    );
+  }
+  function postForm(thread) {
+    formModal(thread ? "Reply to discussion" : "New discussion", [
+      thread ? null : field("title", "Topic", "text"),
+      field("body", "Message", "textarea"),
+    ], async (data, form, dialog) => {
+      const result = await command("discussions.post", { ...data, courseId: selectedCourse, threadId: thread?.id });
+      dialog.close();
+      await load(thread?.id || result.id);
+      if (!teacher && view.isConnected) state.discussionPosts = (state.discussionPosts ?? 0) + 1;
+      msg("Posted.", "success");
+    }, "Post", "Everyone enrolled in this course can see your name and post.");
+  }
+  view.append(heading("Discussions"), body);
+  return load();
+}
+
 function teacherAssignments(view) {
   const assignments = state.assignments.filter((a) => a.course_id === courseId);
   view.append(
@@ -1976,8 +2690,10 @@ function assignmentForm(a) {
       field("status", "Visibility", "select", a?.status || "draft", [
         { value: "draft", label: "Draft" },
         { value: "published", label: "Published" },
+        { value: "scheduled", label: "Scheduled" },
         { value: "closed", label: "Closed" },
       ]),
+      field("publishAt", "Publish at", "datetime-local", localDate(a?.publish_at)),
       el(
         "div",
         { class: "form-grid" },
@@ -2011,6 +2727,7 @@ function assignmentForm(a) {
           id: a?.id,
           courseId,
           deadline: iso(data.deadline),
+          publishAt: iso(data.publishAt),
           maxFileBytes: Number(data.maxFileMB) * 1048576,
           maxTotalBytes: Number(data.maxTotalMB) * 1048576,
         },
@@ -2035,12 +2752,20 @@ function assignmentForm(a) {
     }
   }
   dialog.querySelector("button[type=submit]").before(options);
+  revealScheduledDate(dialog);
 }
 function submissionsView(a) {
-  const list = state.submissions.filter((s) => s.assignment_id === a.id),
-    allFiles = state.submissionFiles.filter(
-      (f) => list.some((s) => s.id === f.submission_id) && f.file,
-    );
+  const ready = state.submissionFiles.filter(f => f.file?.status === "ready");
+  const filesBySubmission = new Map();
+  for (const file of ready) {
+    const files = filesBySubmission.get(file.submission_id) || [];
+    files.push(file);
+    filesBySubmission.set(file.submission_id, files);
+  }
+  const list = state.submissions.filter(s =>
+    s.assignment_id === a.id && (filesBySubmission.has(s.id) || s.grade || s.feedback)
+  );
+  const allFiles = list.flatMap(s => filesBySubmission.get(s.id) || []);
   const body = el(
     "div",
     {},
@@ -2064,17 +2789,13 @@ function submissionsView(a) {
       "ZIP download limit: 100 MB at a time. Larger files can be downloaded individually.",
     ),
   );
-  const rows = list
-    .filter((s) => allFiles.some((f) => f.submission_id === s.id))
-    .map((s) => [
+  const rows = list.map((s) => [
       enrollmentName(s.enrollment_id) + (s.group_id ? " (group)" : ""),
       date(s.submitted_at) + (s.late ? " · Late" : ""),
       el(
         "div",
         { class: "list" },
-        allFiles
-          .filter((f) => f.submission_id === s.id)
-          .map((f) =>
+        (filesBySubmission.get(s.id) || []).map((f) =>
             button(
               f.file.name,
               () => openFile(f.file_id, f.file.name, f.file.mime),
@@ -2111,12 +2832,10 @@ function submissionsView(a) {
   body.append(
     rows.length
       ? table(["Student", "Submitted", "Files", "Grade", ""], rows)
-      : empty("No submitted files."),
+      : empty("No submissions."),
   );
   const submittedIds = new Set(
-    list
-      .filter((s) => allFiles.some((f) => f.submission_id === s.id))
-      .flatMap((s) => [s.enrollment_id, ...JSON.parse(s.member_ids || "[]")]),
+    list.flatMap((s) => [s.enrollment_id, ...JSON.parse(s.member_ids || "[]")]),
   );
   const missing = state.enrollments.filter(
     (e) =>
@@ -2216,7 +2935,7 @@ function studentAssignments(view) {
     const s = state.submissions.find((s) => s.assignmentId === a.id),
       files = s?.files || [];
     view.append(
-      panel(
+      linkedPanel("assignment", a.id,
         heading(a.title, badge(a.status)),
         el("p", {}, a.body),
         help(
@@ -2765,7 +3484,7 @@ function studentProjects(view) {
   view.append(
     ...(state.sheets.length
       ? state.sheets.map((s) =>
-          panel(
+          linkedPanel("project", s.id,
             heading(
               s.title,
               button("Open project table", () => openSheet(s.id), "primary"),
@@ -2802,6 +3521,9 @@ async function teacherSettings(view) {
     }),
   );
   view.append(
+    section("Teacher sign-in", state.teacher?.verifiedEmail
+      ? help("Verified email: " + state.teacher.verifiedEmail)
+      : button("Link an email address", () => emailForm("teacher-link"))),
     section(
       "Academic years",
       browseYear,
@@ -2871,6 +3593,21 @@ async function teacherSettings(view) {
   );
   const storage = el("div", {}, help("Loading storage status…"));
   view.append(section("File storage", storage));
+  view.append(section("Publication emails", button("View email status", async () => {
+    const { senderReady, runnerConfigured, waiting, oldestWaiting, counts } = await api("/notifications/summary");
+    modal("Publication email status", el("div", {},
+      help(senderReady ? "The email sender is configured." : "Publication email sending is disabled."),
+      help(runnerConfigured ? "The notification runner key is configured." : "The notification runner needs a service key."),
+      oldestWaiting ? help("Oldest publication awaiting the runner · " + date(oldestWaiting)) : null,
+      table(["Status", "Messages"], [
+        ["Course publications awaiting the runner", waiting ?? 0],
+        ["Queued or processing", (counts.pending || 0) + (counts.sending || 0)],
+        ["Accepted by email service", counts.accepted || 0],
+        ["Skipped", counts.skipped || 0],
+        ["Failed", counts.failed || 0],
+        ["Delivery unconfirmed", counts.uncertain || 0],
+      ])));
+  })));
   view.append(
     section(
       "Export classroom data",

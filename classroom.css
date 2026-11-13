@@ -420,6 +420,16 @@ main {
   line-height: 1.55;
   white-space: pre-wrap;
 }
+.resource-filters {
+  margin: 0.75rem 0 1rem;
+}
+.course-text {
+  overflow-wrap: anywhere;
+}
+.discussion-more,
+.discussion-new {
+  margin-bottom: 1rem;
+}
 .heading {
   display: flex;
   align-items: center;
