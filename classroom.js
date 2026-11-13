@@ -1031,8 +1031,9 @@ async function indexCourseMaterials(id) {
 async function extractCoursePages(document, blob) {
   const pages = [];
   if (document.mime === "application/pdf") {
-    const pdf = await loadClassroomPdf(blob);
+    const loadingTask = await startClassroomPdf(blob);
     try {
+      const pdf = await loadingTask.promise;
       if (pdf.numPages > 300) throw new Error("Index up to 300 pages per PDF.");
       for (let location = 1; location <= pdf.numPages; location++) {
         const page = await pdf.getPage(location);
@@ -1041,7 +1042,7 @@ async function extractCoursePages(document, blob) {
         page.cleanup();
       }
     } finally {
-      await pdf.destroy();
+      await loadingTask.destroy();
     }
   } else {
     const JSZip = await library("JSZip");
@@ -1633,7 +1634,7 @@ async function downloadFile(id, name) {
   download(blob, name);
   msg();
 }
-async function loadClassroomPdf(blob) {
+async function startClassroomPdf(blob) {
   return getDocument({
     data: new Uint8Array(await blob.arrayBuffer()),
     isEvalSupported: false,
@@ -1645,13 +1646,20 @@ async function loadClassroomPdf(blob) {
       import.meta.url,
     ).href,
     wasmUrl: new URL("./vendor/pdfjs/wasm/", import.meta.url).href,
-  }).promise;
+  });
 }
 async function openFile(id, name, mime, location = 1) {
   if (mime !== "application/pdf") return downloadFile(id, name);
   msg("Opening PDF…");
   const blob = await api("/files/" + encodeURIComponent(id) + "?inline=1", "GET", undefined, true);
-  const pdf = await loadClassroomPdf(blob);
+  const loadingTask = await startClassroomPdf(blob);
+  let pdf;
+  try {
+    pdf = await loadingTask.promise;
+  } catch (error) {
+    await loadingTask.destroy();
+    throw error;
+  }
   let page = Math.min(Math.max(1, location), pdf.numPages);
   const canvas = el("canvas"),
     count = el("span"),
@@ -1709,7 +1717,7 @@ async function openFile(id, name, mime, location = 1) {
     ),
     true,
   );
-  dialog.addEventListener("close", () => pdf.destroy());
+  dialog.addEventListener("close", () => run(() => loadingTask.destroy()));
   await draw();
   msg();
 }
