@@ -1,0 +1,40 @@
+name: Classroom notifications
+
+on:
+  schedule:
+    - cron: '3-58/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: classroom-notifications
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      CLASSROOM_NOTIFICATION_RUN_KEY: ${{ secrets.CLASSROOM_NOTIFICATION_RUN_KEY }}
+    steps:
+      - name: Deliver queued classroom notifications
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$CLASSROOM_NOTIFICATION_RUN_KEY" ]]; then
+            echo "::notice::Configure the classroom notification runner key to enable delivery."
+            exit 0
+          fi
+
+          for attempt in 1 2; do
+            result=$(curl --silent --show-error --fail --max-time 90 --request POST \
+              --header "Authorization: Bearer $CLASSROOM_NOTIFICATION_RUN_KEY" \
+              'https://tasnim-classroom-service.chamseddine.chatgpt.site/api/lms/notifications/run')
+            printf '%s\n' "$result" | jq -e 'type == "object" and (.enabled | type == "boolean")' >/dev/null
+            if [[ "$(jq -r '.hasMore // false' <<< "$result")" != true ]]; then
+              exit 0
+            fi
+          done
+          echo "::notice::Remaining deliveries will be picked up on the next run."
+
