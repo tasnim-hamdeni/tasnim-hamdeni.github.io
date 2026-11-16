@@ -23,7 +23,6 @@ const teacher = document.body.dataset.role === "teacher",
 let authEpoch = 0;
 let refreshId = 0;
 let openedNotification;
-let assistantChat;
 const notificationTabs = {
   announcement: "announcements", chapter: "resources", document: "resources",
   assignment: "assignments", project: "projects", question: "questions",
@@ -391,7 +390,6 @@ function login() {
   }
   authEpoch++;
   openedNotification = undefined;
-  assistantChat = undefined;
   state = null;
   sessionActions.replaceChildren();
   app.replaceChildren();
@@ -616,7 +614,7 @@ function render() {
     ["progress", "Progress"],
     ["calendar", "Calendar"],
     ["discussions", "Discussions"],
-    ["questions", "Ask my teacher"],
+    ["questions", "Private questions"],
   ];
   app.append(
     el(
@@ -870,56 +868,9 @@ function renderTeacher() {
 }
 function studentQuestions(view) {
   const questions = state.questions || [];
-  if (assistantChat?.courseId !== state.course.id) assistantChat = { courseId: state.course.id, entries: [] };
-  const chat = assistantChat;
-  const entries = el("div", { class: "list", "aria-live": "polite" });
-  const input = field("assistantQuestion", "Ask about the course", "textarea");
-  const textarea = input.querySelector("textarea");
-  textarea.required = true;
-  textarea.maxLength = 1800;
-  const submit = el("button", { class: "button primary", type: "submit" }, "Ask assistant");
-  const form = el("form", {}, input, submit);
-  const draw = () => entries.replaceChildren(...chat.entries.map(entry => panel(
-    heading(entry.question),
-    entry.response.status === "answered" ? entry.response.blocks.map(block => el("div", {},
-      el("p", {}, block.text),
-      block.citations.map(source => el("div", { class: "notice" },
-        citationButton(chat.courseId, source),
-        el("blockquote", {}, source.quote),
-      )),
-    )) : el("p", {}, entry.response.message),
-    entry.response.status !== "answered"
-      ? button("Send to my teacher", () => privateQuestion(entry.question))
-      : null,
-  )));
-  form.addEventListener("submit", event => {
-    event.preventDefault();
-    run(async () => {
-      const question = textarea.value.trim();
-      if (!question) return;
-      const epoch = authEpoch;
-      submit.disabled = true;
-      const history = chat.entries.slice(-3).map(entry => entry.question.slice(0, 600));
-      try {
-        const response = await api("/assistant/ask", "POST", { question, history });
-        if (authEpoch !== epoch || assistantChat !== chat) return;
-        chat.entries.push({ question, response });
-        textarea.value = "";
-        draw();
-      } finally {
-        submit.disabled = false;
-      }
-    });
-  });
-  draw();
   view.append(panel(
-    heading("Course assistant"),
-    help("Ask about the published course materials. Check the cited sources and keep personal details out of assistant questions."),
-    entries, form,
-  ));
-  view.append(panel(
-    heading("Private questions", button("+ Ask your teacher", () => privateQuestion())),
-    help("Your teacher can reply here. A new reply is marked on the Ask My Teacher tab."),
+    heading("Private questions", button("+ Ask your teacher", privateQuestion)),
+    help("Your teacher can reply here. A new reply is marked on the Private questions tab."),
     questions.length ? questions.map(q => linkedPanel("question", q.id,
       heading(q.question, q.unread ? badge("New reply") : q.resolved ? badge("Resolved") : null),
       threadReplies(q),
@@ -931,16 +882,8 @@ function studentQuestions(view) {
     )) : empty("No private questions yet."),
   ));
 }
-function citationButton(course, source) {
-  const location = source.location ? " · " + (source.mime === "application/pdf" ? "page " : "slide ") + source.location : "";
-  const title = (source.chapter ? source.chapter + " · " : "") + source.title + location;
-  if (source.mime === "application/pdf" && source.fileId)
-    return button(title, () => openFile(source.fileId, source.name, source.mime, source.location), "text-button");
-  const link = "#open/" + [course, source.kind, source.id].map(encodeURIComponent).join("/");
-  return el("a", { href: link }, title);
-}
-function privateQuestion(question = "") {
-  formModal("Ask your teacher privately", [field("question", "Your question", "textarea", question)],
+function privateQuestion() {
+  formModal("Ask your teacher privately", [field("question", "Your question", "textarea")],
     (data, form, dialog) => saveRefresh("questions.ask", data, dialog), "Send");
 }
 function threadReplies(q) {
@@ -982,97 +925,11 @@ function teacherQuestions(view) {
   input.addEventListener("input", draw);
   status.addEventListener("change", draw);
   view.append(panel(
-    heading("Student questions", button("Index course materials", () => indexCourseMaterials(courseId))),
+    heading("Student questions"),
     el("div", { class: "form-grid" }, search, filter),
     list,
   ));
   draw();
-}
-async function indexCourseMaterials(id) {
-  const { documents } = await api("/assistant/documents?courseId=" + encodeURIComponent(id));
-  const body = el("div");
-  const dialog = modal("Index course materials", body, true);
-  const rows = documents.map(document => {
-    const status = el("span", {}, document.indexed_at
-      ? document.extracted + " of " + document.locations + " pages or slides readable"
-      : "Awaiting indexing");
-    const index = async () => {
-      status.textContent = "Reading document…";
-      try {
-        const blob = await api("/files/" + encodeURIComponent(document.file_id), "GET", undefined, true);
-        const pages = await extractCoursePages(document, blob);
-        const result = await api("/assistant/documents", "POST", {
-          courseId: id, documentId: document.id, fileId: document.file_id, pages,
-        });
-        document.indexed_at = true;
-        status.textContent = result.extracted + " of " + result.locations + " pages or slides readable";
-      } catch (error) {
-        status.textContent = error.message;
-        if (error.status === 401) throw error;
-      }
-    };
-    return { document, status, index, action: button(document.indexed_at ? "Re-index" : "Index", index) };
-  });
-  body.append(
-    help("The assistant uses published PDF and PowerPoint text. Scanned images and image-only slides may have no readable text. Published assignment instructions are included automatically."),
-    rows.length ? button("Index missing materials", async () => {
-      for (const row of rows) {
-        if (!dialog.open) break;
-        if (row.document.indexed_at || row.action.disabled) continue;
-        row.action.disabled = true;
-        try { await row.index(); } finally { row.action.disabled = false; }
-      }
-    }, "primary") : empty("Publish a chapter and its documents before indexing."),
-    rows.length ? table(["Document", "Chapter", "Index", ""],
-      rows.map(row => [row.document.title, row.document.chapter, row.status, row.action])) : null,
-  );
-}
-
-async function extractCoursePages(document, blob) {
-  const pages = [];
-  if (document.mime === "application/pdf") {
-    const loadingTask = await startClassroomPdf(blob);
-    try {
-      const pdf = await loadingTask.promise;
-      if (pdf.numPages > 300) throw new Error("Index up to 300 pages per PDF.");
-      for (let location = 1; location <= pdf.numPages; location++) {
-        const page = await pdf.getPage(location);
-        const { items } = await page.getTextContent();
-        pages.push({ location, text: items.map(item => item.str || "").join(" ") });
-        page.cleanup();
-      }
-    } finally {
-      await loadingTask.destroy();
-    }
-  } else {
-    const JSZip = await library("JSZip");
-    const zip = await JSZip.loadAsync(await blob.arrayBuffer());
-    const parser = new DOMParser();
-    const xml = async path => {
-      const entry = zip.file(path);
-      if (!entry) throw new Error("This PowerPoint file has an unreadable slide structure.");
-      const result = parser.parseFromString(await entry.async("string"), "application/xml");
-      if (result.getElementsByTagName("parsererror").length) throw new Error("This PowerPoint file contains invalid slide XML.");
-      return result;
-    };
-    const relationships = await xml("ppt/_rels/presentation.xml.rels");
-    const targets = new Map(Array.from(relationships.getElementsByTagNameNS("*", "Relationship"), item =>
-      [item.getAttribute("Id"), item.getAttribute("Target")]));
-    const presentation = await xml("ppt/presentation.xml");
-    const slides = Array.from(presentation.getElementsByTagNameNS("*", "sldId"));
-    if (!slides.length || slides.length > 300) throw new Error("Index up to 300 slides per presentation.");
-    for (const [index, slide] of slides.entries()) {
-      const relationship = Array.from(slide.attributes).find(attribute => attribute.localName === "id" && attribute.namespaceURI);
-      const path = targets.get(relationship?.value)?.replace(/^\/ppt\//, "");
-      if (!/^slides\/slide\d+\.xml$/.test(path || "")) throw new Error("This PowerPoint slide is unavailable.");
-      const content = await xml("ppt/" + path);
-      pages.push({ location: index + 1, text: Array.from(content.getElementsByTagNameNS("*", "t"), item => item.textContent).join(" ") });
-    }
-  }
-  if (pages.some(page => page.text.length > 24000) ||
-      new TextEncoder().encode(JSON.stringify(pages)).byteLength > 800000)
-    throw new Error("This file contains too much text to index. Split it into smaller documents.");
-  return pages;
 }
 function countLabel(count, word) {
   return count + " " + word + (count === 1 ? "" : "s");
@@ -1648,7 +1505,7 @@ async function startClassroomPdf(blob) {
     wasmUrl: new URL("./vendor/pdfjs/wasm/", import.meta.url).href,
   });
 }
-async function openFile(id, name, mime, location = 1) {
+async function openFile(id, name, mime) {
   if (mime !== "application/pdf") return downloadFile(id, name);
   msg("Opening PDF…");
   const blob = await api("/files/" + encodeURIComponent(id) + "?inline=1", "GET", undefined, true);
@@ -1660,7 +1517,7 @@ async function openFile(id, name, mime, location = 1) {
     await loadingTask.destroy();
     throw error;
   }
-  let page = Math.min(Math.max(1, location), pdf.numPages);
+  let page = 1;
   const canvas = el("canvas"),
     count = el("span"),
     surface = el("div", { class: "pdf-surface" }, canvas),
